@@ -43,6 +43,9 @@ import wandb
 LOGGING = True
 current_time = datetime.datetime.now()
 
+"""
+Note, must use tensorflow 2.18, version 2.20 results in a segfault without any warning...
+"""
 
 class DQNAgent(Node):
 
@@ -89,7 +92,7 @@ class DQNAgent(Node):
         self.run = wandb.init(
             entity="gazebo-rl",
             project=self.wandb_project_name,
-            sync_tensorboard=True,
+            # sync_tensorboard=True,
             config=config_copy,
             name=self.run_name,
             save_code=True,
@@ -170,12 +173,21 @@ class DQNAgent(Node):
                 msg = Float32MultiArray()
                 msg.data = [float(action), float(score), float(reward)]
                 self.action_pub.publish(msg)
-
+                if True in np.isinf(next_state):
+                    # print(next_state)
+                    print(f"step {self.global_step} inf detected in next_state, skipping...")
+                    local_step -= 1
+                    self.global_step -= 1
+                    continue
                 if self.train_mode:
                     self.replay_memory.store((state, action, reward, next_state, done))
                     local_loss = self.train_model(done)
                     if local_loss is not None:
                         self.run.log({"mse_loss": local_loss}, self.global_step)
+                        # updating epsilon values only after min_replay_memory_size filled
+                        self.step_counter += 1
+                        self.epsilon = self.epsilon_min + (1.0 - self.epsilon_min) * math.exp(
+                            -1.0 * self.step_counter / self.epsilon_decay)
                 state = next_state
 
                 if done:
@@ -191,7 +203,10 @@ class DQNAgent(Node):
                         'epsilon:': self.epsilon,
                     }
                     self.run.log(episode_dict, self.global_step)
-                    print(f"Episode {episode_num} total score: {score:.3f}")
+                    if local_loss is not None:
+                        print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}, loss {local_loss}")
+                    else:
+                        print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}")
                     param_keys = ['epsilon', 'step']
                     param_values = [self.epsilon, self.step_counter]
                     param_dictionary = dict(zip(param_keys, param_values))
@@ -243,9 +258,6 @@ class DQNAgent(Node):
     def get_action(self, state):
         state = np.array(state)
         if self.train_mode:
-            self.step_counter += 1
-            self.epsilon = self.epsilon_min + (1.0 - self.epsilon_min) * math.exp(
-                -1.0 * self.step_counter / self.epsilon_decay)
             lucky = random.random()
             if lucky > (1 - self.epsilon):
                 result = random.randint(0, self.action_size - 1)
@@ -304,6 +316,13 @@ class DQNAgent(Node):
             td_target = rewards.flatten() + self.discount_factor * target_max * (1 - is_dones.flatten())
         old_val = self.q_network(states).gather(1, actions).squeeze()
         loss = F.mse_loss(td_target, old_val)  # both [128]
+        if np.isnan(np.array([loss.item()])):
+            print(f"nan detected in loss {loss}")
+            print(f"buffer size {td_target.shape}")
+            print(f"td_target {self.replay_memory.size}")
+            print(f"old_val {old_val.shape}")
+            print("diff")
+
 
         # optimize the model
         self.optimizer.zero_grad()
