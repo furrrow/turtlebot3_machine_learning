@@ -26,45 +26,22 @@ import random
 import sys
 import time
 
-import numpy
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 from std_srvs.srv import Empty
-import tensorflow
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.layers import Input
-from tensorflow.keras.losses import MeanSquaredError
-from tensorflow.keras.models import load_model
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.optimizers import Adam
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 
 from turtlebot3_msgs.srv import Dqn
-
-
-tensorflow.config.set_visible_devices([], 'GPU')
+import wandb
 
 LOGGING = True
-current_time = datetime.datetime.now().strftime('[%mm%dd-%H:%M]')
-
-
-class DQNMetric(tensorflow.keras.metrics.Metric):
-
-    def __init__(self, name='dqn_metric'):
-        super(DQNMetric, self).__init__(name=name)
-        self.loss = self.add_weight(name='loss', initializer='zeros')
-        self.episode_step = self.add_weight(name='step', initializer='zeros')
-
-    def update_state(self, y_true, y_pred=0, sample_weight=None):
-        self.loss.assign_add(y_true)
-        self.episode_step.assign_add(1)
-
-    def result(self):
-        return self.loss / self.episode_step
-
-    def reset_states(self):
-        self.loss.assign(0)
-        self.episode_step.assign(0)
+current_time = datetime.datetime.now()
 
 
 class DQNAgent(Node):
@@ -74,9 +51,10 @@ class DQNAgent(Node):
 
         self.stage = int(stage_num)
         self.train_mode = True
-        self.state_size = 26
+        self.state_size = 182 # 180+2 corresponds to 360 samples, originally 26
         self.action_size = 5
         self.max_training_episodes = int(max_training_episodes)
+        self.wandb_project_name: str = "DQN_turtlebot3"
 
         self.done = False
         self.succeed = False
@@ -85,17 +63,47 @@ class DQNAgent(Node):
         self.discount_factor = 0.99
         self.learning_rate = 0.0007
         self.epsilon = 1.0
+        self.tau = 1.0 # target model update
         self.step_counter = 0
         self.epsilon_decay = 6000 * self.stage
         self.epsilon_min = 0.05
         self.batch_size = 128
+        self.memory_size = 500000
+        self.device = torch.device("cuda")
+        self.global_step = 0
 
-        self.replay_memory = collections.deque(maxlen=500000)
+        self.replay_memory = NumpyReplayBuffer(max_size=self.memory_size, batch_size=self.batch_size)
         self.min_replay_memory_size = 5000
 
-        self.model = self.create_qnetwork()
-        self.target_model = self.create_qnetwork()
-        self.update_target_model()
+        self.run_name = f"{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
+        config_copy = {
+            "discount_factor"   :   self.discount_factor,
+            "learning_rate"     :   self.learning_rate,
+            "epsilon"           :   self.epsilon,
+            "stage"             :   self.stage,
+            "epsilon_decay"     :   self.epsilon_decay,
+            "epsilon_min"       :   self.epsilon_min,
+            "batch_size"        :   self.batch_size,
+            "memory_size"       :   self.memory_size,
+        }
+        self.run = wandb.init(
+            entity="gazebo-rl",
+            project=self.wandb_project_name,
+            sync_tensorboard=True,
+            config=config_copy,
+            name=self.run_name,
+            save_code=True,
+        )
+        writer = SummaryWriter(f"runs/{self.run_name}")
+        writer.add_text(
+            "hyperparameters",
+            "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in config_copy.items()])),
+        )
+
+        self.q_network = FCNet(self.state_size, self.action_size, self.device).to(self.device)
+        self.target_network = FCNet(self.state_size, self.action_size, self.device).to(self.device)
+        self.target_network.load_state_dict(self.q_network.state_dict())
+        self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
         self.update_target_after = 5000
         self.target_update_after_counter = 0
 
@@ -111,7 +119,11 @@ class DQNAgent(Node):
         )
 
         if self.load_model:
-            self.model.set_weights(load_model(self.model_path).get_weights())
+            checkpoint = torch.load(self.model_path)
+            self.q_network.load_state_dict(checkpoint['model_state_dict'])
+            # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # epoch = checkpoint['epoch']
+            # loss = checkpoint['loss']
             with open(os.path.join(
                 self.model_dir_path,
                 'stage' + str(self.stage) + '_episode' + str(self.load_episode) + '.json'
@@ -119,15 +131,6 @@ class DQNAgent(Node):
                 param = json.load(outfile)
                 self.epsilon = param.get('epsilon')
                 self.step_counter = param.get('step_counter')
-
-        if LOGGING:
-            tensorboard_file_name = current_time + ' dqn_stage' + str(self.stage) + '_reward'
-            home_dir = os.path.expanduser('~')
-            dqn_reward_log_dir = os.path.join(
-                home_dir, 'turtlebot3_dqn_logs', 'gradient_tape', tensorboard_file_name
-            )
-            self.dqn_reward_writer = tensorflow.summary.create_file_writer(dqn_reward_log_dir)
-            self.dqn_reward_metric = DQNMetric()
 
         self.rl_agent_interface_client = self.create_client(Dqn, 'rl_agent_interface')
         self.make_environment_client = self.create_client(Empty, 'make_environment')
@@ -155,9 +158,10 @@ class DQNAgent(Node):
 
             while True:
                 local_step += 1
+                self.global_step += 1
 
-                q_values = self.model.predict(state)
-                sum_max_q += float(numpy.max(q_values))
+                q_values = self.q_network(torch.Tensor(state).to(self.device))
+                sum_max_q += float(np.max(q_values.cpu().detach().numpy()))
 
                 action = int(self.get_action(state))
                 next_state, reward, done = self.step(action)
@@ -168,9 +172,9 @@ class DQNAgent(Node):
                 self.action_pub.publish(msg)
 
                 if self.train_mode:
-                    self.append_sample((state, action, reward, next_state, done))
-                    self.train_model(done)
-
+                    self.replay_memory.store((state, action, reward, next_state, done))
+                    local_loss = self.train_model(done)
+                    self.run.log({"mse_loss": local_loss}, self.global_step)
                 state = next_state
 
                 if done:
@@ -179,21 +183,14 @@ class DQNAgent(Node):
                     msg = Float32MultiArray()
                     msg.data = [float(score), float(avg_max_q)]
                     self.result_pub.publish(msg)
-
-                    if LOGGING:
-                        self.dqn_reward_metric.update_state(score)
-                        with self.dqn_reward_writer.as_default():
-                            tensorflow.summary.scalar(
-                                'dqn_reward', self.dqn_reward_metric.result(), step=episode_num
-                            )
-                        self.dqn_reward_metric.reset_states()
-
-                    print(
-                        'Episode:', episode,
-                        'score:', score,
-                        'memory length:', len(self.replay_memory),
-                        'epsilon:', self.epsilon)
-
+                    episode_dict = {
+                        'Episode:': episode_num,
+                        'score:': score,
+                        'memory length:': self.replay_memory.size,
+                        'epsilon:': self.epsilon,
+                    }
+                    self.run.log(episode_dict, self.global_step)
+                    print(episode_dict)
                     param_keys = ['epsilon', 'step']
                     param_values = [self.epsilon, self.step_counter]
                     param_dictionary = dict(zip(param_keys, param_values))
@@ -234,8 +231,8 @@ class DQNAgent(Node):
 
         rclpy.spin_until_future_complete(self, future)
         if future.result() is not None:
-            state = future.result().state
-            state = numpy.reshape(numpy.asarray(state), [1, self.state_size])
+            state = np.asarray(future.result().state)
+            state = np.reshape(state, [1, self.state_size])
         else:
             self.get_logger().error(
                 'Exception while calling service: {0}'.format(future.exception()))
@@ -243,6 +240,7 @@ class DQNAgent(Node):
         return state
 
     def get_action(self, state):
+        state = np.array(state)
         if self.train_mode:
             self.step_counter += 1
             self.epsilon = self.epsilon_min + (1.0 - self.epsilon_min) * math.exp(
@@ -251,9 +249,11 @@ class DQNAgent(Node):
             if lucky > (1 - self.epsilon):
                 result = random.randint(0, self.action_size - 1)
             else:
-                result = numpy.argmax(self.model.predict(state))
+                q_values = self.q_network.predict(state)
+                result = torch.argmax(q_values, dim=1).cpu().numpy()[0]
         else:
-            result = numpy.argmax(self.model.predict(state))
+            q_values = self.q_network.predict(state)
+            result = torch.argmax(q_values, dim=1).cpu().numpy()[0]
 
         return result
 
@@ -269,8 +269,8 @@ class DQNAgent(Node):
         rclpy.spin_until_future_complete(self, future)
 
         if future.result() is not None:
-            next_state = future.result().state
-            next_state = numpy.reshape(numpy.asarray(next_state), [1, self.state_size])
+            next_state = np.asarray(future.result().state)
+            next_state = np.reshape(next_state, [1, self.state_size])
             reward = future.result().reward
             done = future.result().done
         else:
@@ -279,70 +279,106 @@ class DQNAgent(Node):
 
         return next_state, reward, done
 
-    def create_qnetwork(self):
-        model = Sequential()
-        model.add(Input(shape=(self.state_size,)))
-        model.add(Dense(512, activation='relu'))
-        model.add(Dense(256, activation='relu'))
-        model.add(Dense(128, activation='relu'))
-        model.add(Dense(self.action_size, activation='linear'))
-        model.compile(loss=MeanSquaredError(), optimizer=Adam(learning_rate=self.learning_rate))
-        model.summary()
-
-        return model
-
-    def update_target_model(self):
-        self.target_model.set_weights(self.model.get_weights())
-        self.target_update_after_counter = 0
+    def update_target_network(self):
+        for target_network_param, q_network_param in zip(self.target_network.parameters(), self.q_network.parameters()):
+            target_network_param.data.copy_(
+                self.tau * q_network_param.data + (1.0 - self.tau) * target_network_param.data
+            )
         print('*Target model updated*')
-
-    def append_sample(self, transition):
-        self.replay_memory.append(transition)
 
     def train_model(self, terminal):
         if len(self.replay_memory) < self.min_replay_memory_size:
             return
-        data_in_mini_batch = random.sample(self.replay_memory, self.batch_size)
 
-        current_states = numpy.array([transition[0] for transition in data_in_mini_batch])
-        current_states = current_states.squeeze()
-        current_qvalues_list = self.model.predict(current_states)
+        experiences = self.replay_memory.sample(self.batch_size)
+        states, actions, rewards, new_states, is_dones = experiences
+        states = torch.from_numpy(states).float().to(self.device)  # [128, 182]
+        actions = torch.from_numpy(actions).float().to(torch.int32).to(self.device) # [128, 1]
+        new_states = torch.from_numpy(new_states).float().to(self.device)  # [128, 182]
+        rewards = torch.from_numpy(rewards).float().to(self.device) # [128, 1]
+        is_dones = torch.from_numpy(is_dones).float().to(self.device) # [128, 1]
 
-        next_states = numpy.array([transition[3] for transition in data_in_mini_batch])
-        next_states = next_states.squeeze()
-        next_qvalues_list = self.target_model.predict(next_states)
+        with torch.no_grad():
+            target_max, target_max_indices = self.target_network(new_states).max(dim=1)
+            td_target = rewards.flatten() + self.discount_factor * target_max * (1 - is_dones.flatten())
+        old_val = self.q_network(states).gather(1, actions).squeeze()
+        loss = F.mse_loss(td_target, old_val)  # both [128]
 
-        x_train = []
-        y_train = []
+        # optimize the model
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
 
-        for index, (current_state, action, reward, _, done) in enumerate(data_in_mini_batch):
-            current_q_values = current_qvalues_list[index]
-
-            if not done:
-                future_reward = numpy.max(next_qvalues_list[index])
-                desired_q = reward + self.discount_factor * future_reward
-            else:
-                desired_q = reward
-
-            current_q_values[action] = desired_q
-            x_train.append(current_state)
-            y_train.append(current_q_values)
-
-        x_train = numpy.array(x_train)
-        y_train = numpy.array(y_train)
-        x_train = numpy.reshape(x_train, [len(data_in_mini_batch), self.state_size])
-        y_train = numpy.reshape(y_train, [len(data_in_mini_batch), self.action_size])
-
-        self.model.fit(
-            tensorflow.convert_to_tensor(x_train, tensorflow.float32),
-            tensorflow.convert_to_tensor(y_train, tensorflow.float32),
-            batch_size=self.batch_size, verbose=0
-        )
         self.target_update_after_counter += 1
 
         if self.target_update_after_counter > self.update_target_after and terminal:
-            self.update_target_model()
+            self.update_target_network()
+        return loss.item()
 
+class FCNet(nn.Module):
+    def __init__(self, state_size, n_actions, device):
+        super().__init__()
+        self.device = device
+        self.network = nn.Sequential(
+            nn.Linear(state_size, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, n_actions),
+        )
+
+    def forward(self, x):
+        return self.network(x).to(self.device)
+
+    def predict(self, np_state):
+        x = torch.from_numpy(np_state).to(self.device)
+        return self.network(x).to(self.device)
+
+class NumpyReplayBuffer(object):
+    def __init__(self,
+                 max_size=10000,
+                 batch_size=64):
+        self.ss_mem = np.empty(shape=max_size, dtype=np.ndarray)
+        self.as_mem = np.empty(shape=max_size, dtype=np.ndarray)
+        self.rs_mem = np.empty(shape=max_size, dtype=np.ndarray)
+        self.ps_mem = np.empty(shape=max_size, dtype=np.ndarray)
+        self.ds_mem = np.empty(shape=max_size, dtype=np.ndarray)
+
+        self.max_size = max_size
+        self.batch_size = batch_size
+        self._idx = 0
+        self.size = 0
+
+    def store(self, sample):
+        s, a, r, p, d = sample
+        self.ss_mem[self._idx] = s
+        self.as_mem[self._idx] = a
+        self.rs_mem[self._idx] = r
+        self.ps_mem[self._idx] = p
+        self.ds_mem[self._idx] = d
+
+        self._idx += 1
+        self._idx = self._idx % self.max_size
+
+        self.size += 1
+        self.size = min(self.size, self.max_size)
+
+    def sample(self, batch_size=None, idxs=None):
+        if batch_size is None:
+            batch_size = self.batch_size
+        if idxs is None:
+            idxs = np.random.choice(self.size, batch_size, replace=False)
+        experiences = np.vstack(self.ss_mem[idxs]), \
+            np.vstack(self.as_mem[idxs]), \
+            np.vstack(self.rs_mem[idxs]), \
+            np.vstack(self.ps_mem[idxs]), \
+            np.vstack(self.ds_mem[idxs])
+        return experiences
+
+    def __len__(self):
+        return self.size
 
 def main(args=None):
     if args is None:
