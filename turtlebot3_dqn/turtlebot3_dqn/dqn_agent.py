@@ -174,7 +174,8 @@ class DQNAgent(Node):
                 if self.train_mode:
                     self.replay_memory.store((state, action, reward, next_state, done))
                     local_loss = self.train_model(done)
-                    self.run.log({"mse_loss": local_loss}, self.global_step)
+                    if local_loss is not None:
+                        self.run.log({"mse_loss": local_loss}, self.global_step)
                 state = next_state
 
                 if done:
@@ -190,7 +191,7 @@ class DQNAgent(Node):
                         'epsilon:': self.epsilon,
                     }
                     self.run.log(episode_dict, self.global_step)
-                    print(episode_dict)
+                    print(f"Episode {episode_num} total score: {score:.3f}")
                     param_keys = ['epsilon', 'step']
                     param_values = [self.epsilon, self.step_counter]
                     param_dictionary = dict(zip(param_keys, param_values))
@@ -288,7 +289,7 @@ class DQNAgent(Node):
 
     def train_model(self, terminal):
         if len(self.replay_memory) < self.min_replay_memory_size:
-            return
+            return None
 
         experiences = self.replay_memory.sample(self.batch_size)
         states, actions, rewards, new_states, is_dones = experiences
