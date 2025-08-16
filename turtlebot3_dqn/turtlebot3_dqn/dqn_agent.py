@@ -78,7 +78,7 @@ class DQNAgent(Node):
         self.replay_memory = NumpyReplayBuffer(max_size=self.memory_size, batch_size=self.batch_size)
         self.min_replay_memory_size = 5000
 
-        self.run_name = f"{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
+        self.run_name = f"stage{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
         config_copy = {
             "discount_factor"   :   self.discount_factor,
             "learning_rate"     :   self.learning_rate,
@@ -97,11 +97,6 @@ class DQNAgent(Node):
             name=self.run_name,
             save_code=True,
         )
-        writer = SummaryWriter(f"runs/{self.run_name}")
-        writer.add_text(
-            "hyperparameters",
-            "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in config_copy.items()])),
-        )
 
         self.q_network = FCNet(self.state_size, self.action_size, self.device).to(self.device)
         self.target_network = FCNet(self.state_size, self.action_size, self.device).to(self.device)
@@ -110,7 +105,7 @@ class DQNAgent(Node):
         self.update_target_after = 5000
         self.target_update_after_counter = 0
 
-        self.load_model = False
+        self.load_model = True
         self.load_episode = 0
         self.model_dir_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
@@ -118,22 +113,18 @@ class DQNAgent(Node):
         )
         self.model_path = os.path.join(
             self.model_dir_path,
-            'stage' + str(self.stage) + '_episode' + str(self.load_episode) + '.h5'
+            "stage2_episode3.h5"
         )
 
         if self.load_model:
             checkpoint = torch.load(self.model_path)
             self.q_network.load_state_dict(checkpoint['model_state_dict'])
-            # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            # epoch = checkpoint['epoch']
-            # loss = checkpoint['loss']
-            with open(os.path.join(
-                self.model_dir_path,
-                'stage' + str(self.stage) + '_episode' + str(self.load_episode) + '.json'
-            )) as outfile:
-                param = json.load(outfile)
-                self.epsilon = param.get('epsilon')
-                self.step_counter = param.get('step_counter')
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            self.load_episode = checkpoint['episode']
+            self.epsilon = checkpoint['epsilon']
+            self.global_step = checkpoint['global_step']
+            self.step_counter = checkpoint['step_counter']
+            print(f"model loaded from {self.model_path}")
 
         self.rl_agent_interface_client = self.create_client(Dqn, 'rl_agent_interface')
         self.make_environment_client = self.create_client(Empty, 'make_environment')
@@ -207,9 +198,6 @@ class DQNAgent(Node):
                         print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}, loss {local_loss}")
                     else:
                         print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}")
-                    param_keys = ['epsilon', 'step']
-                    param_values = [self.epsilon, self.step_counter]
-                    param_dictionary = dict(zip(param_keys, param_values))
                     break
 
                 time.sleep(0.01)
@@ -219,15 +207,15 @@ class DQNAgent(Node):
                     self.model_path = os.path.join(
                         self.model_dir_path,
                         'stage' + str(self.stage) + '_episode' + str(episode) + '.h5')
-                    self.model.save(self.model_path)
-                    with open(
-                        os.path.join(
-                            self.model_dir_path,
-                            'stage' + str(self.stage) + '_episode' + str(episode) + '.json'
-                        ),
-                        'w'
-                    ) as outfile:
-                        json.dump(param_dictionary, outfile)
+                    torch.save({
+                        'episode': episode,
+                        'model_state_dict': self.q_network.state_dict(),
+                        'optimizer_state_dict': self.optimizer.state_dict(),
+                        'epsilon': self.epsilon,
+                        'global_step': self.global_step,
+                        'step_counter': self.step_counter,
+                    }, self.model_path)
+                    print(f"model saved to {self.model_path}")
 
     def env_make(self):
         while not self.make_environment_client.wait_for_service(timeout_sec=1.0):
