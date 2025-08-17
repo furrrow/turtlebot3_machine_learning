@@ -74,6 +74,7 @@ class DQNAgent(Node):
         self.memory_size = 500000
         self.device = torch.device("cuda")
         self.global_step = 0
+        self.max_lidar_range = 3.5 # taken from the model sdf file, modify as needed!
 
         self.replay_memory = NumpyReplayBuffer(max_size=self.memory_size, batch_size=self.batch_size)
         self.min_replay_memory_size = 5000
@@ -98,14 +99,16 @@ class DQNAgent(Node):
             save_code=True,
         )
 
-        self.q_network = FCNet(self.state_size, self.action_size, self.device).to(self.device)
-        self.target_network = FCNet(self.state_size, self.action_size, self.device).to(self.device)
+        # self.q_network = FCNet(self.state_size, self.action_size).to(self.device)
+        self.q_network = CNN_net(self.state_size, self.action_size).to(self.device)
+        # self.target_network = FCNet(self.state_size, self.action_size).to(self.device)
+        self.target_network = CNN_net(self.state_size, self.action_size).to(self.device)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
         self.update_target_after = 5000
         self.target_update_after_counter = 0
 
-        self.load_model = True
+        self.load_model = False
         self.load_episode = 0
         self.model_dir_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
@@ -143,6 +146,8 @@ class DQNAgent(Node):
 
         for episode in range(self.load_episode + 1, self.max_training_episodes + 1):
             state = self.reset_environment()
+            state = np.expand_dims(state, axis=1) # manually inject a 'channel' dim
+            state_tensor = torch.Tensor(state).to(self.device) # manually inject a 'channel' dim
             episode_num += 1
             local_step = 0
             score = 0
@@ -154,22 +159,22 @@ class DQNAgent(Node):
                 local_step += 1
                 self.global_step += 1
 
-                q_values = self.q_network(torch.Tensor(state).to(self.device))
+                q_values = self.q_network(state_tensor)
                 sum_max_q += float(np.max(q_values.cpu().detach().numpy()))
 
-                action = int(self.get_action(state))
+                action = int(self.get_action(state_tensor))
                 next_state, reward, done = self.step(action)
+                next_state = np.expand_dims(next_state, axis=1)
                 score += reward
 
                 msg = Float32MultiArray()
                 msg.data = [float(action), float(score), float(reward)]
                 self.action_pub.publish(msg)
+                # check and replace -inf values as max distances
                 if True in np.isinf(next_state):
-                    # print(next_state)
-                    print(f"step {self.global_step} inf detected in next_state, skipping...")
-                    local_step -= 1
-                    self.global_step -= 1
-                    continue
+                    replace_idxs = np.where(np.isinf(next_state[0][0]))[0]
+                    next_state[0][0][replace_idxs] = np.ones(len(replace_idxs)) * self.max_lidar_range
+                    print(f"step {self.global_step} inf detected in next_state, substituting...")
                 if self.train_mode:
                     self.replay_memory.store((state, action, reward, next_state, done))
                     local_loss = self.train_model(done)
@@ -244,16 +249,15 @@ class DQNAgent(Node):
         return state
 
     def get_action(self, state):
-        state = np.array(state)
         if self.train_mode:
             lucky = random.random()
             if lucky > (1 - self.epsilon):
                 result = random.randint(0, self.action_size - 1)
             else:
-                q_values = self.q_network.predict(state)
+                q_values = self.q_network.forward(state)
                 result = torch.argmax(q_values, dim=1).cpu().numpy()[0]
         else:
-            q_values = self.q_network.predict(state)
+            q_values = self.q_network.forward(state)
             result = torch.argmax(q_values, dim=1).cpu().numpy()[0]
 
         return result
@@ -293,9 +297,9 @@ class DQNAgent(Node):
 
         experiences = self.replay_memory.sample(self.batch_size)
         states, actions, rewards, new_states, is_dones = experiences
-        states = torch.from_numpy(states).float().to(self.device)  # [128, 182]
+        states = torch.from_numpy(states).float().to(self.device)  # [128, 1, 182]
         actions = torch.from_numpy(actions).float().to(torch.int32).to(self.device) # [128, 1]
-        new_states = torch.from_numpy(new_states).float().to(self.device)  # [128, 182]
+        new_states = torch.from_numpy(new_states).float().to(self.device)  # [128, 1, 182]
         rewards = torch.from_numpy(rewards).float().to(self.device) # [128, 1]
         is_dones = torch.from_numpy(is_dones).float().to(self.device) # [128, 1]
 
@@ -324,9 +328,8 @@ class DQNAgent(Node):
         return loss.item()
 
 class FCNet(nn.Module):
-    def __init__(self, state_size, n_actions, device):
+    def __init__(self, state_size, n_actions):
         super().__init__()
-        self.device = device
         self.network = nn.Sequential(
             nn.Linear(state_size, 512),
             nn.ReLU(),
@@ -338,11 +341,28 @@ class FCNet(nn.Module):
         )
 
     def forward(self, x):
-        return self.network(x).to(self.device)
+        return self.network(x)
 
-    def predict(self, np_state):
-        x = torch.from_numpy(np_state).to(self.device)
-        return self.network(x).to(self.device)
+
+class CNN_net(nn.Module):
+    def __init__(self, state_size, n_actions):
+        super().__init__()
+        self.conv1 = nn.Conv1d(1, 4, 5, 3)
+        self.pool1 = nn.MaxPool1d(3, 3)
+        self.conv2 = nn.Conv1d(4, 16, 3, 2)
+        self.pool2 = nn.MaxPool1d(2, 2)
+        self.fc = nn.Sequential(
+            nn.Linear(64, 16),
+            nn.ReLU(),
+            nn.Linear(16, n_actions),
+        )
+
+    def forward(self, x): # [batch, 1, 182]
+        x = self.pool1(F.relu(self.conv1(x))) # [batch, 4, 60] -> pool1 -> # [batch, 4, 20]
+        x = self.pool2(F.relu(self.conv2(x))) # [batch, 16, 9] -> pool2 -> # [batch, 16, 4]
+        x = torch.flatten(x, 1) # [batch, 64]
+        x = self.fc(x)
+        return x
 
 class NumpyReplayBuffer(object):
     def __init__(self,
