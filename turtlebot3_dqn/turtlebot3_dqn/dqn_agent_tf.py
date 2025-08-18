@@ -40,13 +40,13 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import Adam
 
 from turtlebot3_msgs.srv import Dqn
-
+import wandb
 
 tensorflow.config.set_visible_devices([], 'GPU')
 
 LOGGING = True
 current_time = datetime.datetime.now().strftime('[%mm%dd-%H:%M]')
-
+start_time = datetime.datetime.now()
 
 class DQNMetric(tensorflow.keras.metrics.Metric):
 
@@ -74,9 +74,10 @@ class DQNAgent(Node):
 
         self.stage = int(stage_num)
         self.train_mode = True
-        self.state_size = 182 # 180+2 corresponds to 360 samples, originally 26
+        self.state_size = 26 # 180+2 corresponds to 360 samples, originally 26
         self.action_size = 5
         self.max_training_episodes = int(max_training_episodes)
+        self.wandb_project_name: str = "DQN_turtlebot3_tf"
 
         self.done = False
         self.succeed = False
@@ -96,6 +97,26 @@ class DQNAgent(Node):
         self.model = self.create_qnetwork()
         self.target_model = self.create_qnetwork()
         self.update_target_model()
+
+        self.run_name = f"stage{self.stage}__{self.learning_rate}__{self.batch_size}__{start_time.strftime('%m%d%y_%H%M')}"
+        config_copy = {
+            "discount_factor": self.discount_factor,
+            "learning_rate": self.learning_rate,
+            "epsilon": self.epsilon,
+            "stage": self.stage,
+            "epsilon_decay": self.epsilon_decay,
+            "epsilon_min": self.epsilon_min,
+            "batch_size": self.batch_size,
+        }
+        self.run = wandb.init(
+            entity="gazebo-rl",
+            project=self.wandb_project_name,
+            # sync_tensorboard=True,
+            config=config_copy,
+            name=self.run_name,
+            save_code=True,
+        )
+
         self.update_target_after = 5000
         self.target_update_after_counter = 0
 
@@ -188,12 +209,14 @@ class DQNAgent(Node):
                             )
                         self.dqn_reward_metric.reset_states()
 
-                    print(
-                        'Episode:', episode,
-                        'score:', score,
-                        'memory length:', len(self.replay_memory),
-                        'epsilon:', self.epsilon)
-
+                    episode_dict = {
+                        "step"  : self.step_counter,
+                        'Episode:': episode,
+                        'score:': score,
+                        'memory length:': len(self.replay_memory),
+                        'epsilon:': self.epsilon,
+                    }
+                    self.run.log(episode_dict, self.step_counter)
                     param_keys = ['epsilon', 'step']
                     param_values = [self.epsilon, self.step_counter]
                     param_dictionary = dict(zip(param_keys, param_values))

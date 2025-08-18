@@ -42,6 +42,7 @@ import wandb
 
 LOGGING = True
 current_time = datetime.datetime.now()
+start_time = datetime.datetime.now()
 
 """
 Note, must use tensorflow 2.18, version 2.20 results in a segfault without any warning...
