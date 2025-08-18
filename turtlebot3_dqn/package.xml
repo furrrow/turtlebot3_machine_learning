@@ -3,13 +3,11 @@
   <name>turtlebot3_dqn</name>
   <version>1.0.1</version>
   <description>
-    The turtlebot3_dqn package using reinforcement learning with DQN (Deep Q-Learning).
+    Custom turtlebot3 machine learning repo
   </description>
-  <maintainer email="pyo@robotis.com">Pyo</maintainer>
+  <maintainer email="jianyu234@gmail.com">JAn</maintainer>
   <license>Apache 2.0</license>
-  <url type="website">http://turtlebot3.robotis.com</url>
-  <url type="repository">https://github.com/ROBOTIS-GIT/turtlebot3_machine_learning</url>
-  <url type="bugtracker">https://github.com/ROBOTIS-GIT/turtlebot3_machine_learning/issues</url>
+  <url type="repository">https://github.com/furrrow/turtlebot3_machine_learning</url>
   <author email="kkjong@robotis.com">Gilbert</author>
   <author email="dddoggi1207@gmail.com">ChanHyeong Lee</author>
   <exec_depend>python3-pip</exec_depend>

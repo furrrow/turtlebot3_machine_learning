@@ -188,7 +188,9 @@ class RLEnvironment(Node):
         for i in range(num_of_lidar_rays):
             angle = angle_min + i * angle_increment
             distance = scan.ranges[i]
-
+            if distance == -float('Inf'):
+                # print(f"{i} / {num_of_lidar_rays}, {distance}")
+                distance = 0.0
             if distance == float('Inf'):
                 distance = 3.5
             elif numpy.isnan(distance):

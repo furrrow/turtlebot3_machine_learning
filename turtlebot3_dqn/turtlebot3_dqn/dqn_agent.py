@@ -42,7 +42,7 @@ import wandb
 
 LOGGING = True
 current_time = datetime.datetime.now()
-start_time = datetime.datetime.now()
+# start_time = datetime.datetime.now()
 
 """
 Note, must use tensorflow 2.18, version 2.20 results in a segfault without any warning...
@@ -55,10 +55,11 @@ class DQNAgent(Node):
 
         self.stage = int(stage_num)
         self.train_mode = True
-        self.state_size = 182 # 180+2 corresponds to 360 samples, originally 26
+        self.state_size = 26 # 180+2 corresponds to 360 samples, originally 26
         self.action_size = 5
         self.max_training_episodes = int(max_training_episodes)
         self.wandb_project_name: str = "DQN_turtlebot3"
+        self.network_type = "FCNet"
 
         self.done = False
         self.succeed = False
@@ -78,7 +79,7 @@ class DQNAgent(Node):
         self.max_lidar_range = 3.5 # taken from the model sdf file, modify as needed!
 
         self.replay_memory = NumpyReplayBuffer(max_size=self.memory_size, batch_size=self.batch_size)
-        self.min_replay_memory_size = 5000
+        self.min_replay_memory_size = 500
 
         self.run_name = f"stage{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
         config_copy = {
@@ -90,6 +91,7 @@ class DQNAgent(Node):
             "epsilon_min"       :   self.epsilon_min,
             "batch_size"        :   self.batch_size,
             "memory_size"       :   self.memory_size,
+            "network"           :   self.network_type,
         }
         self.run = wandb.init(
             entity="gazebo-rl",
@@ -99,11 +101,15 @@ class DQNAgent(Node):
             name=self.run_name,
             save_code=True,
         )
-
-        # self.q_network = FCNet(self.state_size, self.action_size).to(self.device)
-        self.q_network = CNN_net(self.state_size, self.action_size).to(self.device)
-        # self.target_network = FCNet(self.state_size, self.action_size).to(self.device)
-        self.target_network = CNN_net(self.state_size, self.action_size).to(self.device)
+        if self.network_type == "FCNet":
+            self.q_network = FCNet(self.state_size, self.action_size).to(self.device)
+            self.target_network = FCNet(self.state_size, self.action_size).to(self.device)
+        elif self.network_type == "CNN_net":
+            self.q_network = CNN_net(self.state_size, self.action_size).to(self.device)
+            self.target_network = CNN_net(self.state_size, self.action_size).to(self.device)
+        else:
+            print("Error, network_type unrecognized, exiting...")
+            exit()
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
         self.update_target_after = 5000
@@ -173,9 +179,9 @@ class DQNAgent(Node):
                 self.action_pub.publish(msg)
                 # check and replace -inf values as max distances
                 if True in np.isinf(next_state):
-                    replace_idxs = np.where(np.isinf(next_state[0][0]))[0]
-                    next_state[0][0][replace_idxs] = np.ones(len(replace_idxs)) * self.max_lidar_range
-                    print(f"step {self.global_step} inf detected in next_state, substituting...")
+                    print(f"step {self.global_step} inf detected in next_state, exiting...")
+                    print("next state:", next_state)
+                    exit()
                 if self.train_mode:
                     self.replay_memory.store((state, action, reward, next_state, done))
                     local_loss = self.train_model(done)
@@ -256,10 +262,10 @@ class DQNAgent(Node):
                 result = random.randint(0, self.action_size - 1)
             else:
                 q_values = self.q_network.forward(state)
-                result = torch.argmax(q_values, dim=1).cpu().numpy()[0]
+                result = torch.argmax(q_values, dim=-1).cpu().numpy()[0][0]
         else:
             q_values = self.q_network.forward(state)
-            result = torch.argmax(q_values, dim=1).cpu().numpy()[0]
+            result = torch.argmax(q_values, dim=-1).cpu().numpy()[0][0]
 
         return result
 
@@ -305,9 +311,9 @@ class DQNAgent(Node):
         is_dones = torch.from_numpy(is_dones).float().to(self.device) # [128, 1]
 
         with torch.no_grad():
-            target_max, target_max_indices = self.target_network(new_states).max(dim=1)
-            td_target = rewards.flatten() + self.discount_factor * target_max * (1 - is_dones.flatten())
-        old_val = self.q_network(states).gather(1, actions).squeeze()
+            target_max, target_max_indices = self.target_network(new_states).max(dim=-1)
+            td_target = rewards.flatten() + self.discount_factor * target_max.flatten() * (1 - is_dones.flatten())
+        old_val = self.q_network(states).squeeze(1).gather(1, actions).squeeze()
         loss = F.mse_loss(td_target, old_val)  # both [128]
         if np.isnan(np.array([loss.item()])):
             print(f"nan detected in loss {loss}")
@@ -359,9 +365,13 @@ class CNN_net(nn.Module):
         )
 
     def forward(self, x): # [batch, 1, 182]
+        dist_and_angle = x[:, :, 0:2].squeeze(1),
+        x = x[:, :, 2:]
         x = self.pool1(F.relu(self.conv1(x))) # [batch, 4, 60] -> pool1 -> # [batch, 4, 20]
         x = self.pool2(F.relu(self.conv2(x))) # [batch, 16, 9] -> pool2 -> # [batch, 16, 4]
         x = torch.flatten(x, 1) # [batch, 64]
+        x = torch.cat((dist_and_angle, x), dim=0)
+        torch.cat((x, x, x), 0)
         x = self.fc(x)
         return x
 
