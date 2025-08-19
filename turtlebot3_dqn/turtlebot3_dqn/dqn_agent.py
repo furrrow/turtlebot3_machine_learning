@@ -67,6 +67,8 @@ class DQNAgent(Node):
 
         self.discount_factor = 0.99
         self.learning_rate = 0.005
+        self.lr_decay_step = 50
+        self.lr_decay_rate = 0.5
         self.epsilon = 1.0
         self.tau = 1.0 # target model update
         self.step_counter = 0
@@ -85,6 +87,8 @@ class DQNAgent(Node):
         config_copy = {
             "discount_factor"   :   self.discount_factor,
             "learning_rate"     :   self.learning_rate,
+            "lr_decay_step"     :   self.lr_decay_step,
+            "lr_decay_rate"     :   self.lr_decay_rate,
             "epsilon"           :   self.epsilon,
             "stage"             :   self.stage,
             "epsilon_decay"     :   self.epsilon_decay,
@@ -112,7 +116,7 @@ class DQNAgent(Node):
             exit()
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=self.lr_decay_step, gamma=self.lr_decay_rate)
         self.update_target_after = 1000
         self.target_update_after_counter = 0
 
