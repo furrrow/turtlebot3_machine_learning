@@ -55,7 +55,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
-class DQNAgent(Node):
+class PPOAgent(Node):
 
     def __init__(self, stage_num, max_training_episodes):
         super().__init__('ppo_agent')
@@ -74,7 +74,8 @@ class DQNAgent(Node):
         self.total_timesteps: int = 500000
         self.learning_rate: float = 2.5e-4
         self.num_envs: int = 1
-        self.num_steps: int = 512
+        self.num_steps: int = 1024
+        self.anneal_lr: bool = True
         self.gamma: float = 0.99
         self.gae_lambda: float = 0.95
         self.num_minibatches: int = 4
@@ -91,11 +92,6 @@ class DQNAgent(Node):
         self.minibatch_size: int = 0
         self.num_iterations: int = 0
 
-        self.step_counter = 0
-        self.epsilon_decay = 6000 * self.stage
-        self.epsilon_min = 0.05
-        self.batch_size = 256
-        self.memory_size = 500000
         self.device = torch.device("cuda")
         self.global_step = 0
         self.max_lidar_range = 3.5 # taken from the model sdf file, modify as needed!
@@ -105,18 +101,30 @@ class DQNAgent(Node):
         self.num_iterations = self.total_timesteps // self.batch_size
         self.run_name = f"stage{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
         config_copy = {
+            "total_timesteps"   :   self.total_timesteps,
             "learning_rate"     :   self.learning_rate,
+            "num_envs"          :   self.num_envs,
+            "num_steps"         :   self.num_steps,
+            "anneal_lr"         :   self.anneal_lr,
             "gamma"             :   self.gamma,
-            "epsilon"           :   self.epsilon,
+            "gae_lambda"        :   self.gae_lambda,
+            "num_minibatches"   :   self.num_minibatches,
+            "update_epochs"     :   self.update_epochs,
+            "norm_adv"          :   self.norm_adv,
+            "clip_coef"         :   self.clip_coef,
+            "clip_vloss"        :   self.clip_vloss,
+            "ent_coef"          :   self.ent_coef,
+            "vf_coef"           :   self.vf_coef,
+            "max_grad_norm"     :   self.max_grad_norm,
+            "target_kl"         :   self.target_kl,
             "stage"             :   self.stage,
             "batch_size"        :   self.batch_size,
-            "memory_size"       :   self.memory_size,
-            "network"           :   self.network_type,
+            "minibatch_size"    :   self.minibatch_size,
+            "num_iterations"    :   self.num_iterations,
         }
         self.run = wandb.init(
             entity="gazebo-rl",
             project=self.wandb_project_name,
-            # sync_tensorboard=True,
             config=config_copy,
             name=self.run_name,
             save_code=True,
@@ -125,8 +133,8 @@ class DQNAgent(Node):
         self.optimizer = torch.optim.Adam(self.agent.parameters(), lr=self.learning_rate, eps=1e-5)
 
         # ALGO Logic: Storage setup
-        self.obs = torch.zeros((self.num_steps, self.num_envs) + self.state_size).to(self.device)
-        self.actions = torch.zeros((self.num_steps, self.num_envs) + self.action_size).to(self.device)
+        self.obs = torch.zeros((self.num_steps, self.num_envs) + (self.state_size,)).to(self.device)
+        self.actions = torch.zeros((self.num_steps, self.num_envs)).to(self.device)
         self.logprobs = torch.zeros((self.num_steps, self.num_envs)).to(self.device)
         self.rewards = torch.zeros((self.num_steps, self.num_envs)).to(self.device)
         self.dones = torch.zeros((self.num_steps, self.num_envs)).to(self.device)
@@ -151,17 +159,15 @@ class DQNAgent(Node):
             self.agent.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             self.load_episode = checkpoint['episode']
-            self.epsilon = checkpoint['epsilon']
             self.global_step = checkpoint['global_step']
-            self.step_counter = checkpoint['step_counter']
             print(f"model loaded from {self.model_path}")
 
         self.rl_agent_interface_client = self.create_client(Dqn, 'rl_agent_interface')
         self.make_environment_client = self.create_client(Empty, 'make_environment')
         self.reset_environment_client = self.create_client(Dqn, 'reset_environment')
 
-        self.action_pub = self.create_publisher(Float32MultiArray, '/get_action', 10)
-        self.result_pub = self.create_publisher(Float32MultiArray, 'result', 10)
+        # self.action_pub = self.create_publisher(Float32MultiArray, '/get_action', 10)
+        # self.result_pub = self.create_publisher(Float32MultiArray, 'result', 10)
 
         self.process()
 
@@ -178,6 +184,7 @@ class DQNAgent(Node):
         time.sleep(1.0)
 
         for iteration in range(1, self.num_iterations + 1):
+            episode_start = time.time()
             # Annealing the rate if instructed to do so.
             if self.anneal_lr:
                 frac = 1.0 - (iteration - 1.0) / self.num_iterations
@@ -185,6 +192,7 @@ class DQNAgent(Node):
                 self.optimizer.param_groups[0]["lr"] = lrnow
 
             for step in range(0, self.num_steps):
+                step_start = time.time()
                 self.global_step += self.num_envs
                 self.obs[step] = next_obs
                 self.dones[step] = next_done
@@ -197,9 +205,9 @@ class DQNAgent(Node):
                 self.logprobs[step] = logprob
 
                 # execute the game and log data.
-                next_obs, reward, next_done = self.step(action.cpu().numpy())
+                next_obs, reward, next_done = self.step(action.item())
                 self.rewards[step] = torch.tensor(reward).to(self.device).view(-1)
-                next_obs, next_done = torch.Tensor(next_obs).to(self.device), torch.Tensor(next_done).to(self.device)
+                next_obs, next_done = torch.Tensor(next_obs).to(self.device), torch.Tensor([next_done]).to(self.device)
                 self.run.log({"reward": reward}, self.global_step)
                 episode_reward += reward
 
@@ -207,7 +215,7 @@ class DQNAgent(Node):
                 # msg.data = [float(action), float(episode_reward), float(reward)]
                 # self.action_pub.publish(msg)
                 if next_done:
-                    self.run.log({"score": episode_reward}, episode_reward)
+                    self.run.log({"score": episode_reward}, self.global_step)
                     episode_num += 1
                     episode_reward = 0
                     state = self.reset_environment()
@@ -215,7 +223,7 @@ class DQNAgent(Node):
                     next_obs = torch.Tensor(state).to(self.device)
                     next_done = torch.zeros(self.num_envs).to(self.device)
                     time.sleep(1.0)
-
+                self.run.log({"step_duration": time.time() - step_start}, self.global_step)
             # bootstrap value if not done
             with torch.no_grad():
                 next_value = self.agent.get_value(next_obs).reshape(1, -1)
@@ -234,23 +242,23 @@ class DQNAgent(Node):
                 returns = advantages + self.values
 
             # flatten the batch
-            b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
-            b_logprobs = logprobs.reshape(-1)
-            b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
+            b_obs = self.obs.reshape(-1, self.state_size)
+            b_logprobs = self.logprobs.reshape(-1)
+            b_actions = self.actions.reshape(-1)
             b_advantages = advantages.reshape(-1)
             b_returns = returns.reshape(-1)
-            b_values = values.reshape(-1)
+            b_values = self.values.reshape(-1)
 
             # Optimizing the policy and value network
-            b_inds = np.arange(args.batch_size)
+            b_inds = np.arange(self.batch_size)
             clipfracs = []
-            for epoch in range(args.update_epochs):
+            for epoch in range(self.update_epochs):
                 np.random.shuffle(b_inds)
-                for start in range(0, args.batch_size, args.minibatch_size):
-                    end = start + args.minibatch_size
+                for start in range(0, self.batch_size, self.minibatch_size):
+                    end = start + self.minibatch_size
                     mb_inds = b_inds[start:end]
 
-                    _, newlogprob, entropy, newvalue, explore = agent.get_action_and_value(b_obs[mb_inds],
+                    _, newlogprob, entropy, newvalue, explore = self.agent.get_action_and_value(b_obs[mb_inds],
                                                                                            b_actions.long()[mb_inds])
                     logratio = newlogprob - b_logprobs[mb_inds]
                     ratio = logratio.exp()
@@ -259,25 +267,25 @@ class DQNAgent(Node):
                         # calculate approx_kl http://joschu.net/blog/kl-approx.html
                         old_approx_kl = (-logratio).mean()
                         approx_kl = ((ratio - 1) - logratio).mean()
-                        clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
+                        clipfracs += [((ratio - 1.0).abs() > self.clip_coef).float().mean().item()]
 
                     mb_advantages = b_advantages[mb_inds]
-                    if args.norm_adv:
+                    if self.norm_adv:
                         mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
                     # Policy loss
                     pg_loss1 = -mb_advantages * ratio
-                    pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                    pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coef, 1 + self.clip_coef)
                     pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                     # Value loss
                     newvalue = newvalue.view(-1)
-                    if args.clip_vloss:
+                    if self.clip_vloss:
                         v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
                         v_clipped = b_values[mb_inds] + torch.clamp(
                             newvalue - b_values[mb_inds],
-                            -args.clip_coef,
-                            args.clip_coef,
+                            -self.clip_coef,
+                            self.clip_coef,
                         )
                         v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
                         v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
@@ -286,103 +294,46 @@ class DQNAgent(Node):
                         v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                     entropy_loss = entropy.mean()
-                    loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                    loss = pg_loss - self.ent_coef * entropy_loss + v_loss * self.vf_coef
 
-                    optimizer.zero_grad()
+                    self.optimizer.zero_grad()
                     loss.backward()
-                    nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
-                    optimizer.step()
+                    nn.utils.clip_grad_norm_(self.agent.parameters(), self.max_grad_norm)
+                    self.optimizer.step()
 
-                if args.target_kl is not None and approx_kl > args.target_kl:
+                if self.target_kl is not None and approx_kl > self.target_kl:
                     break
 
             y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
             var_y = np.var(y_true)
             explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
-            # TRY NOT TO MODIFY: record rewards for plotting purposes
-            writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
-            writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
-            writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-            writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-            writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-            writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-            writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
-            writer.add_scalar("losses/explained_variance", explained_var, global_step)
+            # record rewards for plotting purposes
+            metric_dict = {
+                "episode":                  episode_num,
+                "charts/learning_rate":     self.optimizer.param_groups[0]["lr"],
+                "losses/value_loss":        v_loss.item(),
+                "losses/policy_loss":       pg_loss.item(),
+                "losses/entropy":           entropy_loss.item(),
+                "losses/old_approx_kl":     old_approx_kl.item(),
+                "losses/approx_kl":         approx_kl.item(),
+                "losses/clipfrac":          np.mean(clipfracs),
+                "losses/explained_variance":explained_var,
+                "episode_duration":         time.time() - episode_start,
+            }
+            self.run.log(metric_dict, self.global_step)
 
-
-
-            while True:
-                local_step += 1
-                self.global_step += 1
-
-                q_values = self.q_network(state_tensor)
-                sum_max_q += float(np.max(q_values.cpu().detach().numpy()))
-
-                action = int(self.get_action(state_tensor))
-                next_state, reward, done = self.step(action)
-                next_state = np.expand_dims(next_state, axis=1)
-                score += reward
-
-                msg = Float32MultiArray()
-                msg.data = [float(action), float(score), float(reward)]
-                self.action_pub.publish(msg)
-                # check and replace -inf values as max distances
-                if True in np.isinf(next_state):
-                    print(f"WARNING! inf detected in next_state in step {self.global_step}! advise stopping the program!")
-                    print("next state:", next_state)
-                    replace_idxs = np.where(np.isinf(next_state[0][0]))[0]
-                    next_state[0][0][replace_idxs] = np.ones(len(replace_idxs)) * self.max_lidar_range
-                    # exit()
-                if self.train_mode:
-                    self.replay_memory.store((state, action, reward, next_state, done))
-                    local_loss = self.train_model(done)
-                    self.run.log({"reward": reward}, self.global_step)
-                    if local_loss is not None:
-                        self.run.log({"mse_loss": local_loss}, self.global_step)
-                        # updating epsilon values only after min_replay_memory_size filled
-                        self.step_counter += 1
-                        self.epsilon = self.epsilon_min + (1.0 - self.epsilon_min) * math.exp(
-                            -1.0 * self.step_counter / self.epsilon_decay)
-                state = next_state
-
-                if done:
-                    avg_max_q = sum_max_q / local_step if local_step > 0 else 0.0
-
-                    msg = Float32MultiArray()
-                    msg.data = [float(score), float(avg_max_q)]
-                    self.result_pub.publish(msg)
-                    episode_dict = {
-                        'Episode:': episode_num,
-                        'score:': score,
-                        'memory length:': self.replay_memory.size,
-                        'epsilon:': self.epsilon,
-                        'lr': self.scheduler.get_last_lr()[-1],
-                    }
-                    self.run.log(episode_dict, self.global_step)
-                    if local_loss is not None:
-                        print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}, loss {local_loss}")
-                        self.scheduler.step()
-                    else:
-                        print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}")
-                    break
-
-                time.sleep(0.01)
-
-            if self.train_mode:
-                if episode % 100 == 0:
-                    self.model_path = os.path.join(
-                        self.model_dir_path,
-                        'stage' + str(self.stage) + '_episode' + str(episode) + '.h5')
-                    torch.save({
-                        'episode': episode,
-                        'model_state_dict': self.agent.state_dict(),
-                        'optimizer_state_dict': self.optimizer.state_dict(),
-                        'epsilon': self.epsilon,
-                        'global_step': self.global_step,
-                        'step_counter': self.step_counter,
-                    }, self.model_path)
-                    print(f"model saved to {self.model_path}")
+            if episode_num % 100 == 0:
+                self.model_path = os.path.join(
+                    self.model_dir_path,
+                    'ppo_stage' + str(self.stage) + '_episode' + str(episode_num) + '.h5')
+                torch.save({
+                    'episode': episode_num,
+                    'model_state_dict': self.agent.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    'global_step': self.global_step,
+                }, self.model_path)
+                print(f"model saved to {self.model_path}")
 
     def env_make(self):
         while not self.make_environment_client.wait_for_service(timeout_sec=1.0):
@@ -410,19 +361,6 @@ class DQNAgent(Node):
 
         return state
 
-    def get_action(self, state):
-        if self.train_mode:
-            lucky = random.random()
-            if lucky > (1 - self.epsilon):
-                result = random.randint(0, self.action_size - 1)
-            else:
-                q_values = self.agent.forward(state)
-                result = torch.argmax(q_values, dim=-1).cpu().numpy()[0][0]
-        else:
-            q_values = self.agent.forward(state)
-            result = torch.argmax(q_values, dim=-1).cpu().numpy()[0][0]
-
-        return result
 
     def step(self, action):
         req = Dqn.Request()
@@ -446,48 +384,6 @@ class DQNAgent(Node):
 
         return next_state, reward, done
 
-    def update_target_network(self):
-        for target_network_param, q_network_param in zip(self.target_network.parameters(), self.q_network.parameters()):
-            target_network_param.data.copy_(
-                self.tau * q_network_param.data + (1.0 - self.tau) * target_network_param.data
-            )
-        print('*Target model updated*')
-
-    def train_model(self, terminal):
-        if len(self.replay_memory) < self.min_replay_memory_size:
-            return None
-
-        experiences = self.replay_memory.sample(self.batch_size)
-        states, actions, rewards, new_states, is_dones = experiences
-        states = torch.from_numpy(states).float().to(self.device)  # [128, 1, 182]
-        actions = torch.from_numpy(actions).float().to(torch.int32).to(self.device) # [128, 1]
-        new_states = torch.from_numpy(new_states).float().to(self.device)  # [128, 1, 182]
-        rewards = torch.from_numpy(rewards).float().to(self.device) # [128, 1]
-        is_dones = torch.from_numpy(is_dones).float().to(self.device) # [128, 1]
-
-        with torch.no_grad():
-            target_max, target_max_indices = self.target_network(new_states).max(dim=-1)
-            td_target = rewards.flatten() + self.discount_factor * target_max.flatten() * (1 - is_dones.flatten())
-        old_val = self.q_network(states).squeeze(1).gather(1, actions).squeeze()
-        loss = F.mse_loss(td_target, old_val)  # both [128]
-        if np.isnan(np.array([loss.item()])):
-            print(f"nan detected in loss {loss}")
-            print(f"buffer size {td_target.shape}")
-            print(f"td_target {self.replay_memory.size}")
-            print(f"old_val {old_val.shape}")
-            print("diff")
-
-
-        # optimize the model
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        self.target_update_after_counter += 1
-
-        if self.target_update_after_counter > self.update_target_after and terminal:
-            self.update_target_network()
-        return loss.item()
 
 class Agent(nn.Module):
     def __init__(self, n_state, n_action):
@@ -529,7 +425,7 @@ def main(args=None):
     max_training_episodes = args[2] if len(args) > 2 else '1000'
     rclpy.init(args=args)
 
-    dqn_agent = DQNAgent(stage_num, max_training_episodes)
+    dqn_agent = PPOAgent(stage_num, max_training_episodes)
     rclpy.spin(dqn_agent)
 
     dqn_agent.destroy_node()
