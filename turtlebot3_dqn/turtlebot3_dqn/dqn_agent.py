@@ -72,14 +72,14 @@ class DQNAgent(Node):
         self.step_counter = 0
         self.epsilon_decay = 6000 * self.stage
         self.epsilon_min = 0.05
-        self.batch_size = 512
+        self.batch_size = 256
         self.memory_size = 500000
         self.device = torch.device("cuda")
         self.global_step = 0
         self.max_lidar_range = 3.5 # taken from the model sdf file, modify as needed!
 
         self.replay_memory = NumpyReplayBuffer(max_size=self.memory_size, batch_size=self.batch_size)
-        self.min_replay_memory_size = 2056
+        self.min_replay_memory_size = 5000
 
         self.run_name = f"stage{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
         config_copy = {

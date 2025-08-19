@@ -314,9 +314,9 @@ class RLEnvironment(Node):
         reward = yaw_reward + dist_reward + obstacle_reward
 
         if self.succeed:
-            reward = 100.0
+            reward += 100.0
         elif self.fail:
-            reward = -50.0
+            reward += -50.0
 
         return reward
 
