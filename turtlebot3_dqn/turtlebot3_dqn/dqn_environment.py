@@ -307,10 +307,11 @@ class RLEnvironment(Node):
 
     def calculate_reward(self):
         yaw_reward = 1 - (2 * abs(self.goal_angle) / math.pi)
+        dist_reward = -abs(self.goal_distance) / 7.0 # note 3.5 is max radar dist
         obstacle_reward = self.compute_weighted_obstacle_reward()
 
-        print('directional_reward: %f, obstacle_reward: %f' % (yaw_reward, obstacle_reward))
-        reward = yaw_reward + obstacle_reward
+        print(f"directional_reward: {yaw_reward:.3f}, dist_reward: {yaw_reward:.3f}, obstacle_reward: {obstacle_reward:.3f}")
+        reward = yaw_reward + dist_reward + obstacle_reward
 
         if self.succeed:
             reward = 100.0

@@ -79,7 +79,7 @@ class DQNAgent(Node):
         self.max_lidar_range = 3.5 # taken from the model sdf file, modify as needed!
 
         self.replay_memory = NumpyReplayBuffer(max_size=self.memory_size, batch_size=self.batch_size)
-        self.min_replay_memory_size = 500
+        self.min_replay_memory_size = 5000
 
         self.run_name = f"stage{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
         config_copy = {
@@ -112,7 +112,7 @@ class DQNAgent(Node):
             exit()
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
-        self.update_target_after = 5000
+        self.update_target_after = 1000
         self.target_update_after_counter = 0
 
         self.load_model = False
@@ -179,12 +179,15 @@ class DQNAgent(Node):
                 self.action_pub.publish(msg)
                 # check and replace -inf values as max distances
                 if True in np.isinf(next_state):
-                    print(f"step {self.global_step} inf detected in next_state, exiting...")
+                    print(f"WARNING! inf detected in next_state in step {self.global_step}! advise stopping the program!")
                     print("next state:", next_state)
-                    exit()
+                    replace_idxs = np.where(np.isinf(next_state[0][0]))[0]
+                    next_state[0][0][replace_idxs] = np.ones(len(replace_idxs)) * self.max_lidar_range
+                    # exit()
                 if self.train_mode:
                     self.replay_memory.store((state, action, reward, next_state, done))
                     local_loss = self.train_model(done)
+                    self.run.log({"reward": reward}, self.global_step)
                     if local_loss is not None:
                         self.run.log({"mse_loss": local_loss}, self.global_step)
                         # updating epsilon values only after min_replay_memory_size filled
