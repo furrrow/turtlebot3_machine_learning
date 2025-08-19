@@ -66,20 +66,20 @@ class DQNAgent(Node):
         self.fail = False
 
         self.discount_factor = 0.99
-        self.learning_rate = 0.0007
+        self.learning_rate = 0.005
         self.epsilon = 1.0
         self.tau = 1.0 # target model update
         self.step_counter = 0
         self.epsilon_decay = 6000 * self.stage
         self.epsilon_min = 0.05
-        self.batch_size = 128
+        self.batch_size = 512
         self.memory_size = 500000
         self.device = torch.device("cuda")
         self.global_step = 0
         self.max_lidar_range = 3.5 # taken from the model sdf file, modify as needed!
 
         self.replay_memory = NumpyReplayBuffer(max_size=self.memory_size, batch_size=self.batch_size)
-        self.min_replay_memory_size = 500
+        self.min_replay_memory_size = 2056
 
         self.run_name = f"stage{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
         config_copy = {
@@ -112,6 +112,7 @@ class DQNAgent(Node):
             exit()
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
         self.update_target_after = 1000
         self.target_update_after_counter = 0
 
@@ -207,10 +208,12 @@ class DQNAgent(Node):
                         'score:': score,
                         'memory length:': self.replay_memory.size,
                         'epsilon:': self.epsilon,
+                        'lr': self.scheduler.get_last_lr()[-1],
                     }
                     self.run.log(episode_dict, self.global_step)
                     if local_loss is not None:
                         print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}, loss {local_loss}")
+                        self.scheduler.step()
                     else:
                         print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}")
                     break
