@@ -79,7 +79,7 @@ class DQNAgent(Node):
         self.max_lidar_range = 3.5 # taken from the model sdf file, modify as needed!
 
         self.replay_memory = NumpyReplayBuffer(max_size=self.memory_size, batch_size=self.batch_size)
-        self.min_replay_memory_size = 5000
+        self.min_replay_memory_size = 500
 
         self.run_name = f"stage{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
         config_copy = {
