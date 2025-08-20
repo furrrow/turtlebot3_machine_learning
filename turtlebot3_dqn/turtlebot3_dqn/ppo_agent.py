@@ -72,7 +72,7 @@ class PPOAgent(Node):
         self.fail = False
 
         self.total_timesteps: int = 500000
-        self.learning_rate: float = 2.5e-4
+        self.learning_rate: float = 2.5e-3
         self.num_envs: int = 1
         self.num_steps: int = 1024
         self.anneal_lr: bool = True
@@ -205,7 +205,9 @@ class PPOAgent(Node):
                 self.logprobs[step] = logprob
 
                 # execute the game and log data.
+                time_before = time.time()
                 next_obs, reward, next_done = self.step(action.item())
+                plugin_response_time = time.time() - time_before
                 self.rewards[step] = torch.tensor(reward).to(self.device).view(-1)
                 next_obs, next_done = torch.Tensor(next_obs).to(self.device), torch.Tensor([next_done]).to(self.device)
                 self.run.log({"reward": reward}, self.global_step)
@@ -223,7 +225,10 @@ class PPOAgent(Node):
                     next_obs = torch.Tensor(state).to(self.device)
                     next_done = torch.zeros(self.num_envs).to(self.device)
                     time.sleep(1.0)
-                self.run.log({"step_duration": time.time() - step_start}, self.global_step)
+                self.run.log({
+                    "step_duration": time.time() - step_start,
+                    "plugin_response_time": plugin_response_time,
+                }, self.global_step)
             # bootstrap value if not done
             with torch.no_grad():
                 next_value = self.agent.get_value(next_obs).reshape(1, -1)
@@ -254,6 +259,7 @@ class PPOAgent(Node):
             clipfracs = []
             for epoch in range(self.update_epochs):
                 np.random.shuffle(b_inds)
+                optimizing_steps = 0
                 for start in range(0, self.batch_size, self.minibatch_size):
                     end = start + self.minibatch_size
                     mb_inds = b_inds[start:end]
@@ -300,6 +306,7 @@ class PPOAgent(Node):
                     loss.backward()
                     nn.utils.clip_grad_norm_(self.agent.parameters(), self.max_grad_norm)
                     self.optimizer.step()
+                    optimizing_steps += 1
 
                 if self.target_kl is not None and approx_kl > self.target_kl:
                     break
@@ -319,6 +326,7 @@ class PPOAgent(Node):
                 "losses/approx_kl":         approx_kl.item(),
                 "losses/clipfrac":          np.mean(clipfracs),
                 "losses/explained_variance":explained_var,
+                "optimizing_steps":         optimizing_steps,
                 "episode_duration":         time.time() - episode_start,
             }
             self.run.log(metric_dict, self.global_step)

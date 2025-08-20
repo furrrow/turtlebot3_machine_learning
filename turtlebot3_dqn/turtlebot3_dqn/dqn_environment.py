@@ -334,10 +334,10 @@ class RLEnvironment(Node):
         self.cmd_vel_pub.publish(msg)
         if self.stop_cmd_vel_timer is None:
             self.prev_goal_distance = self.init_goal_distance
-            self.stop_cmd_vel_timer = self.create_timer(0.8, self.timer_callback)
+            self.stop_cmd_vel_timer = self.create_timer(2.0, self.timer_callback)
         else:
             self.destroy_timer(self.stop_cmd_vel_timer)
-            self.stop_cmd_vel_timer = self.create_timer(0.8, self.timer_callback)
+            self.stop_cmd_vel_timer = self.create_timer(2.0, self.timer_callback)
 
         response.state = self.calculate_state()
         response.reward = self.calculate_reward()
