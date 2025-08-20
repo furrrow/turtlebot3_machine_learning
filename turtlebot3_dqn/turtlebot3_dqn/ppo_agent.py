@@ -62,6 +62,7 @@ class PPOAgent(Node):
 
         self.stage = int(stage_num)
         self.train_mode = True
+        self.wandb = False
         self.state_size = 26 # 180+2 corresponds to 360 samples, originally 26
         self.action_size = 5
         self.max_training_episodes = int(max_training_episodes)
@@ -122,13 +123,14 @@ class PPOAgent(Node):
             "minibatch_size"    :   self.minibatch_size,
             "num_iterations"    :   self.num_iterations,
         }
-        self.run = wandb.init(
-            entity="gazebo-rl",
-            project=self.wandb_project_name,
-            config=config_copy,
-            name=self.run_name,
-            save_code=True,
-        )
+        if self.wandb:
+            self.run = wandb.init(
+                entity="gazebo-rl",
+                project=self.wandb_project_name,
+                config=config_copy,
+                name=self.run_name,
+                save_code=True,
+            )
         self.agent = Agent(self.state_size, self.action_size).to(self.device)
         self.optimizer = torch.optim.Adam(self.agent.parameters(), lr=self.learning_rate, eps=1e-5)
 
@@ -171,6 +173,10 @@ class PPOAgent(Node):
 
         self.process()
 
+    def log(self, info:dict):
+        if self.wandb:
+            self.run.log(info, self.global_step)
+
     def process(self):
         self.env_make()
         time.sleep(1.0)
@@ -192,7 +198,6 @@ class PPOAgent(Node):
                 self.optimizer.param_groups[0]["lr"] = lrnow
 
             for step in range(0, self.num_steps):
-                step_start = time.time()
                 self.global_step += self.num_envs
                 self.obs[step] = next_obs
                 self.dones[step] = next_done
@@ -205,19 +210,17 @@ class PPOAgent(Node):
                 self.logprobs[step] = logprob
 
                 # execute the game and log data.
-                time_before = time.time()
                 next_obs, reward, next_done = self.step(action.item())
-                plugin_response_time = time.time() - time_before
                 self.rewards[step] = torch.tensor(reward).to(self.device).view(-1)
                 next_obs, next_done = torch.Tensor(next_obs).to(self.device), torch.Tensor([next_done]).to(self.device)
-                self.run.log({"reward": reward}, self.global_step)
+                self.log({"reward": reward})
                 episode_reward += reward
 
                 # msg = Float32MultiArray()
                 # msg.data = [float(action), float(episode_reward), float(reward)]
                 # self.action_pub.publish(msg)
                 if next_done:
-                    self.run.log({"score": episode_reward}, self.global_step)
+                    self.log({"score": episode_reward})
                     episode_num += 1
                     episode_reward = 0
                     state = self.reset_environment()
@@ -225,10 +228,6 @@ class PPOAgent(Node):
                     next_obs = torch.Tensor(state).to(self.device)
                     next_done = torch.zeros(self.num_envs).to(self.device)
                     time.sleep(1.0)
-                self.run.log({
-                    "step_duration": time.time() - step_start,
-                    "plugin_response_time": plugin_response_time,
-                }, self.global_step)
             # bootstrap value if not done
             with torch.no_grad():
                 next_value = self.agent.get_value(next_obs).reshape(1, -1)
@@ -329,7 +328,7 @@ class PPOAgent(Node):
                 "optimizing_steps":         optimizing_steps,
                 "episode_duration":         time.time() - episode_start,
             }
-            self.run.log(metric_dict, self.global_step)
+            self.log(metric_dict)
 
             if episode_num % 100 == 0:
                 self.model_path = os.path.join(
@@ -376,7 +375,7 @@ class PPOAgent(Node):
 
         while not self.rl_agent_interface_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('rl_agent interface service not available, waiting again...')
-
+        step_start_time = time.time()
         future = self.rl_agent_interface_client.call_async(req)
 
         rclpy.spin_until_future_complete(self, future)
@@ -389,7 +388,7 @@ class PPOAgent(Node):
         else:
             self.get_logger().error(
                 'Exception while calling service: {0}'.format(future.exception()))
-
+        self.log({"plugin_response_time": time.time() - step_start_time})
         return next_state, reward, done
 
 

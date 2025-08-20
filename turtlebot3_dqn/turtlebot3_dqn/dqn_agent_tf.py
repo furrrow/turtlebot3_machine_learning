@@ -74,6 +74,7 @@ class DQNAgent(Node):
 
         self.stage = int(stage_num)
         self.train_mode = True
+        self.wandb = True
         self.state_size = 26 # 180+2 corresponds to 360 samples, originally 26
         self.action_size = 5
         self.max_training_episodes = int(max_training_episodes)
@@ -108,14 +109,14 @@ class DQNAgent(Node):
             "epsilon_min": self.epsilon_min,
             "batch_size": self.batch_size,
         }
-        self.run = wandb.init(
-            entity="gazebo-rl",
-            project=self.wandb_project_name,
-            # sync_tensorboard=True,
-            config=config_copy,
-            name=self.run_name,
-            save_code=True,
-        )
+        if self.wandb:
+            self.run = wandb.init(
+                entity="gazebo-rl",
+                project=self.wandb_project_name,
+                config=config_copy,
+                name=self.run_name,
+                save_code=True,
+            )
 
         self.update_target_after = 5000
         self.target_update_after_counter = 0
@@ -159,6 +160,10 @@ class DQNAgent(Node):
 
         self.process()
 
+    def log(self, info:dict):
+        if self.wandb:
+            self.run.log(info, self.step_counter)
+
     def process(self):
         self.env_make()
         time.sleep(1.0)
@@ -166,6 +171,7 @@ class DQNAgent(Node):
         episode_num = self.load_episode
 
         for episode in range(self.load_episode + 1, self.max_training_episodes + 1):
+            episode_start = time.time()
             state = self.reset_environment()
             episode_num += 1
             local_step = 0
@@ -175,6 +181,7 @@ class DQNAgent(Node):
             time.sleep(1.0)
 
             while True:
+                step_start = time.time()
                 local_step += 1
 
                 q_values = self.model.predict(state)
@@ -193,7 +200,9 @@ class DQNAgent(Node):
                     self.train_model(done)
 
                 state = next_state
-
+                self.log({
+                    "step_duration": time.time() - step_start,
+                })
                 if done:
                     avg_max_q = sum_max_q / local_step if local_step > 0 else 0.0
 
@@ -215,8 +224,9 @@ class DQNAgent(Node):
                         'score:': score,
                         'memory length:': len(self.replay_memory),
                         'epsilon:': self.epsilon,
+                        "episode_duration": time.time() - episode_start,
                     }
-                    self.run.log(episode_dict, self.step_counter)
+                    self.log(episode_dict)
                     param_keys = ['epsilon', 'step']
                     param_values = [self.epsilon, self.step_counter]
                     param_dictionary = dict(zip(param_keys, param_values))
@@ -286,11 +296,11 @@ class DQNAgent(Node):
 
         while not self.rl_agent_interface_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('rl_agent interface service not available, waiting again...')
-
+        step_start_time = time.time()
         future = self.rl_agent_interface_client.call_async(req)
-
+        future_call_async = time.time()
         rclpy.spin_until_future_complete(self, future)
-
+        future_complete = time.time()
         if future.result() is not None:
             next_state = numpy.asarray(future.result().state)
             next_state = numpy.reshape(next_state, [1, self.state_size])
@@ -299,7 +309,18 @@ class DQNAgent(Node):
         else:
             self.get_logger().error(
                 'Exception while calling service: {0}'.format(future.exception()))
-
+        print_string = (f"async time: {future_call_async - step_start_time:.6f},"
+              f"future complete time: {future_complete - future_call_async:.6f},"
+              f"future result time: {time.time() - future_complete:.6f},"
+              f"plugin_response_time: {time.time() - step_start_time:.6f}")
+        # print(print_string)
+        log_dict = {
+            "async_time": future_call_async - step_start_time,
+            "future_complete_time": future_complete - future_call_async,
+            "future_result_time": time.time() - future_complete,
+            "plugin_response_time": time.time() - step_start_time,
+        }
+        self.log(log_dict)
         return next_state, reward, done
 
     def create_qnetwork(self):

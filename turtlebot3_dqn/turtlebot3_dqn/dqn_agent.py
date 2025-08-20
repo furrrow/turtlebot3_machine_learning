@@ -55,6 +55,7 @@ class DQNAgent(Node):
 
         self.stage = int(stage_num)
         self.train_mode = True
+        self.wandb = True
         self.state_size = 26 # 180+2 corresponds to 360 samples, originally 26
         self.action_size = 5
         self.max_training_episodes = int(max_training_episodes)
@@ -74,7 +75,7 @@ class DQNAgent(Node):
         self.step_counter = 0
         self.epsilon_decay = 6000 * self.stage
         self.epsilon_min = 0.05
-        self.batch_size = 256
+        self.batch_size = 128
         self.memory_size = 500000
         self.device = torch.device("cuda")
         self.global_step = 0
@@ -97,14 +98,14 @@ class DQNAgent(Node):
             "memory_size"       :   self.memory_size,
             "network"           :   self.network_type,
         }
-        self.run = wandb.init(
-            entity="gazebo-rl",
-            project=self.wandb_project_name,
-            # sync_tensorboard=True,
-            config=config_copy,
-            name=self.run_name,
-            save_code=True,
-        )
+        if self.wandb:
+            self.run = wandb.init(
+                entity="gazebo-rl",
+                project=self.wandb_project_name,
+                config=config_copy,
+                name=self.run_name,
+                save_code=True,
+            )
         if self.network_type == "FCNet":
             self.q_network = FCNet(self.state_size, self.action_size).to(self.device)
             self.target_network = FCNet(self.state_size, self.action_size).to(self.device)
@@ -150,6 +151,10 @@ class DQNAgent(Node):
 
         self.process()
 
+    def log(self, info:dict):
+        if self.wandb:
+            self.run.log(info, self.step_counter)
+
     def process(self):
         self.env_make()
         time.sleep(1.0)
@@ -177,9 +182,7 @@ class DQNAgent(Node):
                 sum_max_q += float(np.max(q_values.cpu().detach().numpy()))
 
                 action = int(self.get_action(state_tensor))
-                time_before = time.time()
                 next_state, reward, done = self.step(action)
-                plugin_response_time = time.time() - time_before
                 next_state = np.expand_dims(next_state, axis=1)
                 score += reward
 
@@ -204,10 +207,9 @@ class DQNAgent(Node):
                         self.epsilon = self.epsilon_min + (1.0 - self.epsilon_min) * math.exp(
                             -1.0 * self.step_counter / self.epsilon_decay)
                 state = next_state
-                self.run.log({
+                self.log({
                     "step_duration": time.time() - step_start,
-                    "plugin_response_time": plugin_response_time,
-                }, self.global_step)
+                })
                 if done:
                     avg_max_q = sum_max_q / local_step if local_step > 0 else 0.0
 
@@ -222,7 +224,7 @@ class DQNAgent(Node):
                         'lr': self.scheduler.get_last_lr()[-1],
                         "episode_duration": time.time() - episode_start,
                     }
-                    self.run.log(episode_dict, self.global_step)
+                    self.log(episode_dict)
                     if local_loss is not None:
                         print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}, loss {local_loss}")
                         self.scheduler.step()
@@ -236,7 +238,7 @@ class DQNAgent(Node):
                 if episode % 100 == 0:
                     self.model_path = os.path.join(
                         self.model_dir_path,
-                        'stage' + str(self.stage) + '_episode' + str(episode) + '.h5')
+                        'dqn_stage' + str(self.stage) + '_episode' + str(episode) + '.h5')
                     torch.save({
                         'episode': episode,
                         'model_state_dict': self.q_network.state_dict(),
@@ -293,7 +295,7 @@ class DQNAgent(Node):
 
         while not self.rl_agent_interface_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('rl_agent interface service not available, waiting again...')
-
+        step_start_time = time.time()
         future = self.rl_agent_interface_client.call_async(req)
 
         rclpy.spin_until_future_complete(self, future)
@@ -306,7 +308,7 @@ class DQNAgent(Node):
         else:
             self.get_logger().error(
                 'Exception while calling service: {0}'.format(future.exception()))
-
+        self.log({"plugin_response_time": time.time() - step_start_time})
         return next_state, reward, done
 
     def update_target_network(self):

@@ -19,6 +19,7 @@
 
 import math
 import os
+import time
 
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TwistStamped
@@ -189,7 +190,7 @@ class RLEnvironment(Node):
             angle = angle_min + i * angle_increment
             distance = scan.ranges[i]
             if distance == -float('Inf'):
-                # print(f"{i} / {num_of_lidar_rays}, {distance}")
+                # print(f"{i} / F{num_of_lidar_rays}, {distance}")
                 distance = 0.0
             if distance == float('Inf'):
                 distance = 3.5
@@ -310,7 +311,7 @@ class RLEnvironment(Node):
         dist_reward = -abs(self.goal_distance) / 3.5 # note 3.5 is max radar dist
         obstacle_reward = self.compute_weighted_obstacle_reward()
         info_str = f"directional_reward: {yaw_reward:.3f}, dist_reward: {dist_reward:.3f}, obstacle_reward: {obstacle_reward:.3f}"
-        self.get_logger().info(info_str)
+        # self.get_logger().info(info_str)
         reward = yaw_reward + dist_reward + obstacle_reward
 
         if self.succeed:
@@ -321,6 +322,7 @@ class RLEnvironment(Node):
         return reward
 
     def rl_agent_interface_callback(self, request, response):
+        start_time = time.time()
         action = request.action
         if ROS_DISTRO == 'humble':
             msg = Twist()
@@ -332,22 +334,26 @@ class RLEnvironment(Node):
             msg.twist.angular.z = self.angular_vel[action]
 
         self.cmd_vel_pub.publish(msg)
+        publish_time = time.time()
         if self.stop_cmd_vel_timer is None:
             self.prev_goal_distance = self.init_goal_distance
             self.stop_cmd_vel_timer = self.create_timer(2.0, self.timer_callback)
         else:
             self.destroy_timer(self.stop_cmd_vel_timer)
             self.stop_cmd_vel_timer = self.create_timer(2.0, self.timer_callback)
-
         response.state = self.calculate_state()
+        state_time = time.time()
         response.reward = self.calculate_reward()
+        reward_time = time.time()
         response.done = self.done
 
         if self.done is True:
             self.done = False
             self.succeed = False
             self.fail = False
-
+        print_str = (f"publish: {publish_time - start_time:.5f}, "
+                     f"reward_calc: {reward_time - state_time:.5f},")
+        # print(print_str)
         return response
 
     def timer_callback(self):
