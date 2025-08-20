@@ -177,7 +177,9 @@ class DQNAgent(Node):
                 sum_max_q += float(np.max(q_values.cpu().detach().numpy()))
 
                 action = int(self.get_action(state_tensor))
+                time_before = time.time()
                 next_state, reward, done = self.step(action)
+                plugin_response_time = time.time() - time_before
                 next_state = np.expand_dims(next_state, axis=1)
                 score += reward
 
@@ -202,7 +204,10 @@ class DQNAgent(Node):
                         self.epsilon = self.epsilon_min + (1.0 - self.epsilon_min) * math.exp(
                             -1.0 * self.step_counter / self.epsilon_decay)
                 state = next_state
-                self.run.log({"step_duration": time.time() - step_start}, self.global_step)
+                self.run.log({
+                    "step_duration": time.time() - step_start,
+                    "plugin_response_time": plugin_response_time,
+                }, self.global_step)
                 if done:
                     avg_max_q = sum_max_q / local_step if local_step > 0 else 0.0
 
