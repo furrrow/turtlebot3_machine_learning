@@ -128,7 +128,7 @@ class DQNAgent(Node):
         )
         self.model_path = os.path.join(
             self.model_dir_path,
-            "stage2_episode3.h5"
+            "stage1_episode200.h5"
         )
 
         if self.load_model:
@@ -145,8 +145,8 @@ class DQNAgent(Node):
         self.make_environment_client = self.create_client(Empty, 'make_environment')
         self.reset_environment_client = self.create_client(Dqn, 'reset_environment')
 
-        self.action_pub = self.create_publisher(Float32MultiArray, '/get_action', 10)
-        self.result_pub = self.create_publisher(Float32MultiArray, 'result', 10)
+        # self.action_pub = self.create_publisher(Float32MultiArray, '/get_action', 10)
+        # self.result_pub = self.create_publisher(Float32MultiArray, 'result', 10)
 
         self.process()
 
@@ -157,6 +157,7 @@ class DQNAgent(Node):
         episode_num = self.load_episode
 
         for episode in range(self.load_episode + 1, self.max_training_episodes + 1):
+            episode_start = time.time()
             state = self.reset_environment()
             state = np.expand_dims(state, axis=1) # manually inject a 'channel' dim
             state_tensor = torch.Tensor(state).to(self.device) # manually inject a 'channel' dim
@@ -168,6 +169,7 @@ class DQNAgent(Node):
             time.sleep(1.0)
 
             while True:
+                step_start = time.time()
                 local_step += 1
                 self.global_step += 1
 
@@ -200,7 +202,7 @@ class DQNAgent(Node):
                         self.epsilon = self.epsilon_min + (1.0 - self.epsilon_min) * math.exp(
                             -1.0 * self.step_counter / self.epsilon_decay)
                 state = next_state
-
+                self.run.log({"step_duration": time.time() - step_start}, self.global_step)
                 if done:
                     avg_max_q = sum_max_q / local_step if local_step > 0 else 0.0
 
@@ -213,6 +215,7 @@ class DQNAgent(Node):
                         'memory length:': self.replay_memory.size,
                         'epsilon:': self.epsilon,
                         'lr': self.scheduler.get_last_lr()[-1],
+                        "episode_duration": time.time() - episode_start,
                     }
                     self.run.log(episode_dict, self.global_step)
                     if local_loss is not None:
@@ -221,8 +224,8 @@ class DQNAgent(Node):
                     else:
                         print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}")
                     break
-
-                time.sleep(0.01)
+                # if self.memory_size < 12000:
+                #     time.sleep(0.01)
 
             if self.train_mode:
                 if episode % 100 == 0:
