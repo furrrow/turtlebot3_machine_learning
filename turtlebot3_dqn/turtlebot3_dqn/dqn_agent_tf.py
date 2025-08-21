@@ -74,7 +74,7 @@ class DQNAgent(Node):
 
         self.stage = int(stage_num)
         self.train_mode = True
-        self.wandb = True
+        self.wandb = False
         self.state_size = 26 # 180+2 corresponds to 360 samples, originally 26
         self.action_size = 5
         self.max_training_episodes = int(max_training_episodes)
@@ -93,7 +93,7 @@ class DQNAgent(Node):
         self.batch_size = 128
 
         self.replay_memory = collections.deque(maxlen=500000)
-        self.min_replay_memory_size = 5000
+        self.min_replay_memory_size = 500
 
         self.model = self.create_qnetwork()
         self.target_model = self.create_qnetwork()
@@ -173,6 +173,8 @@ class DQNAgent(Node):
         for episode in range(self.load_episode + 1, self.max_training_episodes + 1):
             episode_start = time.time()
             state = self.reset_environment()
+            self.destroy_client(self.rl_agent_interface_client)
+            self.rl_agent_interface_client = self.create_client(Dqn, 'rl_agent_interface')
             episode_num += 1
             local_step = 0
             score = 0
@@ -313,7 +315,7 @@ class DQNAgent(Node):
               f"future complete time: {future_complete - future_call_async:.6f},"
               f"future result time: {time.time() - future_complete:.6f},"
               f"plugin_response_time: {time.time() - step_start_time:.6f}")
-        # print(print_string)
+        print(print_string)
         log_dict = {
             "async_time": future_call_async - step_start_time,
             "future_complete_time": future_complete - future_call_async,

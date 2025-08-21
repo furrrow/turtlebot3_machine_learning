@@ -337,10 +337,10 @@ class RLEnvironment(Node):
         publish_time = time.time()
         if self.stop_cmd_vel_timer is None:
             self.prev_goal_distance = self.init_goal_distance
-            self.stop_cmd_vel_timer = self.create_timer(2.0, self.timer_callback)
+            self.stop_cmd_vel_timer = self.create_timer(1.0, self.timer_callback)
         else:
             self.destroy_timer(self.stop_cmd_vel_timer)
-            self.stop_cmd_vel_timer = self.create_timer(2.0, self.timer_callback)
+            self.stop_cmd_vel_timer = self.create_timer(1.0, self.timer_callback)
         response.state = self.calculate_state()
         state_time = time.time()
         response.reward = self.calculate_reward()
@@ -352,8 +352,9 @@ class RLEnvironment(Node):
             self.succeed = False
             self.fail = False
         print_str = (f"publish: {publish_time - start_time:.5f}, "
-                     f"reward_calc: {reward_time - state_time:.5f},")
-        # print(print_str)
+                     f"reward_calc: {reward_time - state_time:.5f},"
+                     f"total_time: {time.time() - start_time:.5f}")
+        print(print_str)
         return response
 
     def timer_callback(self):
