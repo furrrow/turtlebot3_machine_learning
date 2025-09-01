@@ -48,10 +48,10 @@ current_time = datetime.datetime.now()
 Note, must use tensorflow 2.18, version 2.20 results in a segfault without any warning...
 """
 
-class DQNAgent(Node):
+class DQNAgent():
 
     def __init__(self, stage_num, max_training_episodes):
-        super().__init__('dqn_agent')
+        super().__init__()
 
         self.stage = int(stage_num)
         self.train_mode = True
@@ -66,16 +66,16 @@ class DQNAgent(Node):
         self.succeed = False
         self.fail = False
 
-        self.discount_factor = 0.99
+        self.discount_factor = 0.999
         self.learning_rate = 0.005
         self.lr_decay_step = 50
         self.lr_decay_rate = 0.5
-        self.epsilon = 1.0
+        self.epsilon = 0.5 # 1.0
         self.tau = 1.0 # target model update
         self.step_counter = 0
-        self.epsilon_decay = 6000 * self.stage
+        self.epsilon_decay = 30000 # 6000 * self.stage
         self.epsilon_min = 0.05
-        self.batch_size = 128
+        self.batch_size = 512
         self.memory_size = 500000
         self.device = torch.device("cuda")
         self.global_step = 0
@@ -141,139 +141,12 @@ class DQNAgent(Node):
             self.global_step = checkpoint['global_step']
             self.step_counter = checkpoint['step_counter']
             print(f"model loaded from {self.model_path}")
-
-        self.rl_agent_interface_client = self.create_client(Dqn, 'rl_agent_interface')
-        self.make_environment_client = self.create_client(Empty, 'make_environment')
-        self.reset_environment_client = self.create_client(Dqn, 'reset_environment')
-
-        # self.action_pub = self.create_publisher(Float32MultiArray, '/get_action', 10)
-        # self.result_pub = self.create_publisher(Float32MultiArray, 'result', 10)
-
-        self.process()
+        self.node = None
 
     def log(self, info:dict):
         if self.wandb:
-            self.run.log(info, self.step_counter)
+            self.run.log(info, self.global_step)
 
-    def process(self):
-        self.env_make()
-        time.sleep(1.0)
-
-        episode_num = self.load_episode
-
-        for episode in range(self.load_episode + 1, self.max_training_episodes + 1):
-            episode_start = time.time()
-            state = self.reset_environment()
-            state = np.expand_dims(state, axis=1) # manually inject a 'channel' dim
-            state_tensor = torch.Tensor(state).to(self.device) # manually inject a 'channel' dim
-            episode_num += 1
-            local_step = 0
-            score = 0
-            sum_max_q = 0.0
-
-            time.sleep(1.0)
-
-            while True:
-                step_start = time.time()
-                local_step += 1
-                self.global_step += 1
-
-                q_values = self.q_network(state_tensor)
-                sum_max_q += float(np.max(q_values.cpu().detach().numpy()))
-
-                action = int(self.get_action(state_tensor))
-                next_state, reward, done = self.step(action)
-                next_state = np.expand_dims(next_state, axis=1)
-                score += reward
-
-                # msg = Float32MultiArray()
-                # msg.data = [float(action), float(score), float(reward)]
-                # self.action_pub.publish(msg)
-                # check and replace -inf values as max distances
-                if True in np.isinf(next_state):
-                    print(f"WARNING! inf detected in next_state in step {self.global_step}! advise stopping the program!")
-                    print("next state:", next_state)
-                    replace_idxs = np.where(np.isinf(next_state[0][0]))[0]
-                    next_state[0][0][replace_idxs] = np.ones(len(replace_idxs)) * self.max_lidar_range
-                    # exit()
-                if self.train_mode:
-                    self.replay_memory.store((state, action, reward, next_state, done))
-                    local_loss = self.train_model(done)
-                    self.run.log({"reward": reward}, self.global_step)
-                    if local_loss is not None:
-                        self.run.log({"mse_loss": local_loss}, self.global_step)
-                        # updating epsilon values only after min_replay_memory_size filled
-                        self.step_counter += 1
-                        self.epsilon = self.epsilon_min + (1.0 - self.epsilon_min) * math.exp(
-                            -1.0 * self.step_counter / self.epsilon_decay)
-                state = next_state
-                self.log({
-                    "step_duration": time.time() - step_start,
-                })
-                if done:
-                    avg_max_q = sum_max_q / local_step if local_step > 0 else 0.0
-
-                    # msg = Float32MultiArray()
-                    # msg.data = [float(score), float(avg_max_q)]
-                    # self.result_pub.publish(msg)
-                    episode_dict = {
-                        'Episode:': episode_num,
-                        'score:': score,
-                        'memory length:': self.replay_memory.size,
-                        'epsilon:': self.epsilon,
-                        'lr': self.scheduler.get_last_lr()[-1],
-                        "episode_duration": time.time() - episode_start,
-                    }
-                    self.log(episode_dict)
-                    if local_loss is not None:
-                        print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}, loss {local_loss}")
-                        self.scheduler.step()
-                    else:
-                        print(f"Episode {episode_num} step {self.global_step} total score: {score:.3f}")
-                    break
-                # if self.memory_size < 12000:
-                #     time.sleep(0.01)
-
-            if self.train_mode:
-                if episode % 100 == 0:
-                    self.model_path = os.path.join(
-                        self.model_dir_path,
-                        'dqn_stage' + str(self.stage) + '_episode' + str(episode) + '.h5')
-                    torch.save({
-                        'episode': episode,
-                        'model_state_dict': self.q_network.state_dict(),
-                        'optimizer_state_dict': self.optimizer.state_dict(),
-                        'epsilon': self.epsilon,
-                        'global_step': self.global_step,
-                        'step_counter': self.step_counter,
-                    }, self.model_path)
-                    print(f"model saved to {self.model_path}")
-
-    def env_make(self):
-        while not self.make_environment_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(
-                'Environment make client failed to connect to the server, try again ...'
-            )
-
-        self.make_environment_client.call_async(Empty.Request())
-
-    def reset_environment(self):
-        while not self.reset_environment_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(
-                'Reset environment client failed to connect to the server, try again ...'
-            )
-
-        future = self.reset_environment_client.call_async(Dqn.Request())
-
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is not None:
-            state = np.asarray(future.result().state)
-            state = np.reshape(state, [1, self.state_size])
-        else:
-            self.get_logger().error(
-                'Exception while calling service: {0}'.format(future.exception()))
-
-        return state
 
     def get_action(self, state):
         if self.train_mode:
@@ -288,28 +161,6 @@ class DQNAgent(Node):
             result = torch.argmax(q_values, dim=-1).cpu().numpy()[0][0]
 
         return result
-
-    def step(self, action):
-        req = Dqn.Request()
-        req.action = action
-
-        while not self.rl_agent_interface_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('rl_agent interface service not available, waiting again...')
-        step_start_time = time.time()
-        future = self.rl_agent_interface_client.call_async(req)
-
-        rclpy.spin_until_future_complete(self, future)
-
-        if future.result() is not None:
-            next_state = np.asarray(future.result().state)
-            next_state = np.reshape(next_state, [1, self.state_size])
-            reward = future.result().reward
-            done = future.result().done
-        else:
-            self.get_logger().error(
-                'Exception while calling service: {0}'.format(future.exception()))
-        self.log({"plugin_response_time": time.time() - step_start_time})
-        return next_state, reward, done
 
     def update_target_network(self):
         for target_network_param, q_network_param in zip(self.target_network.parameters(), self.q_network.parameters()):
@@ -353,6 +204,162 @@ class DQNAgent(Node):
         if self.target_update_after_counter > self.update_target_after and terminal:
             self.update_target_network()
         return loss.item()
+
+class RLNode(Node):
+    def __init__(self, dqn_agent:DQNAgent, time_threshold=0.2):
+        super().__init__('RL_node')
+        self.agent = dqn_agent
+        self.time_threshold = time_threshold
+        self.rl_agent_interface_client = self.create_client(Dqn, 'rl_agent_interface')
+        self.make_environment_client = self.create_client(Empty, 'make_environment')
+        self.reset_environment_client = self.create_client(Dqn, 'reset_environment')
+        # self.action_pub = self.create_publisher(Float32MultiArray, '/get_action', 10)
+        # self.result_pub = self.create_publisher(Float32MultiArray, 'result', 10)
+        self.rl_process()
+
+    def rl_process(self):
+        self.env_make()
+        time.sleep(1.0)
+        episode_num = self.agent.load_episode
+        step_duration_array = np.zeros(10)
+
+        for episode in range(self.agent.load_episode + 1, self.agent.max_training_episodes + 1):
+            episode_start = time.time()
+            state = self.reset_environment()
+            state = np.expand_dims(state, axis=1)  # manually inject a 'channel' dim
+            state_tensor = torch.Tensor(state).to(self.agent.device)  # manually inject a 'channel' dim
+            episode_num += 1
+            local_step = 0
+            score = 0
+
+            time.sleep(1.0)
+
+            while True:
+                step_start = time.time()
+                local_step += 1
+                self.agent.global_step += 1
+
+                action = int(self.agent.get_action(state_tensor))
+                next_state, reward, done = self.step(action)
+                next_state = np.expand_dims(next_state, axis=1)
+                score += reward
+
+                if self.agent.train_mode:
+                    self.agent.replay_memory.store((state, action, reward, next_state, done))
+                    local_loss = self.agent.train_model(done)
+                    self.agent.log({"reward": reward})
+                    if local_loss is not None:
+                        self.agent.log({"mse_loss": local_loss})
+                        # updating epsilon values only after min_replay_memory_size filled
+                        self.agent.step_counter += 1
+                        self.agent.epsilon = self.agent.epsilon_min + (1.0 - self.agent.epsilon_min) * math.exp(
+                            -1.0 * self.agent.step_counter / self.agent.epsilon_decay)
+                state = next_state
+                step_duration = time.time() - step_start
+                step_duration_array[local_step % 10] = step_duration
+
+                self.agent.log({
+                    "timer/step_duration": step_duration,
+                })
+                if done:
+                    episode_dict = {
+                        'Episode:': episode_num,
+                        'score:': score,
+                        'memory length:': self.agent.replay_memory.size,
+                        'epsilon:': self.agent.epsilon,
+                        'lr': self.agent.scheduler.get_last_lr()[-1],
+                        "timer/episode_duration": time.time() - episode_start,
+                    }
+                    self.agent.log(episode_dict)
+                    if local_loss is not None:
+                        print(
+                            f"Episode {episode_num} step {self.agent.global_step} total score: {score:.3f}, loss {local_loss}")
+                        self.agent.scheduler.step()
+                    else:
+                        print(f"Episode {episode_num} step {self.agent.global_step} total score: {score:.3f}")
+                    break
+
+                time.sleep(0.01)
+
+            if self.agent.train_mode:
+                if episode % 100 == 0:
+                    model_path = os.path.join(
+                        self.agent.model_dir_path,
+                        'dqn_stage' + str(self.agent.stage) + '_episode' + str(episode) + '.h5')
+                    torch.save({
+                        'episode': episode,
+                        'model_state_dict': self.agent.q_network.state_dict(),
+                        'optimizer_state_dict': self.agent.optimizer.state_dict(),
+                        'epsilon': self.agent.epsilon,
+                        'global_step': self.agent.global_step,
+                        'step_counter': self.agent.step_counter,
+                    }, model_path)
+                    print(f"model saved to {model_path}")
+            if np.median(step_duration_array) >= self.time_threshold:
+                warning_msg = (f"median step duration {np.median(step_duration_array):.3f} "
+                               f"greater than threshold {self.time_threshold}, shutting down node...")
+                self.agent.load_episode = episode_num
+                self.get_logger().warn(warning_msg)
+                break
+
+    def env_make(self):
+        while not self.make_environment_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn(
+                'Environment make client failed to connect to the server, try again ...'
+            )
+
+        self.make_environment_client.call_async(Empty.Request())
+
+    def reset_environment(self):
+        while not self.reset_environment_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn(
+                'Reset environment client failed to connect to the server, try again ...'
+            )
+
+        future = self.reset_environment_client.call_async(Dqn.Request())
+
+        rclpy.spin_until_future_complete(self, future)
+        if future.result() is not None:
+            state = np.asarray(future.result().state)
+            state = np.reshape(state, [1, -1])
+        else:
+            self.get_logger().error(
+                'Exception while calling service: {0}'.format(future.exception()))
+
+        return state
+
+    def step(self, action):
+        req = Dqn.Request()
+        req.action = action
+
+        while not self.rl_agent_interface_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('rl_agent interface service not available, waiting again...')
+        step_start_time = time.time()
+        future = self.rl_agent_interface_client.call_async(req)
+        future_call_async = time.time()
+        rclpy.spin_until_future_complete(self, future)
+        future_complete = time.time()
+        if future.result() is not None:
+            next_state = np.asarray(future.result().state)
+            next_state = np.reshape(next_state, [1, -1])
+            reward = future.result().reward
+            done = future.result().done
+        else:
+            self.get_logger().error(
+                'Exception while calling service: {0}'.format(future.exception()))
+        print_string = (f"async time: {future_call_async - step_start_time:.6f},"
+              f"future complete time: {future_complete - future_call_async:.6f},"
+              f"future result time: {time.time() - future_complete:.6f},"
+              f"plugin_response_time: {time.time() - step_start_time:.6f}")
+        # print(print_string)
+        log_dict = {
+            "timer/async_time": future_call_async - step_start_time,
+            "timer/future_complete_time": future_complete - future_call_async,
+            "timer/future_result_time": time.time() - future_complete,
+            "timer/plugin_response_time": time.time() - step_start_time,
+        }
+        self.agent.log(log_dict)
+        return next_state, reward, done
 
 class FCNet(nn.Module):
     def __init__(self, state_size, n_actions):
@@ -440,17 +447,23 @@ class NumpyReplayBuffer(object):
         return self.size
 
 def main(args=None):
+    """
+    dqn_agent: has network, replay buffer, optimizer, logger
+    dqn_node: contains each iteration's training, and we pass in the dqn_agent each time.
+    """
     if args is None:
         args = sys.argv
     stage_num = args[1] if len(args) > 1 else '1'
     max_training_episodes = args[2] if len(args) > 2 else '1000'
-    rclpy.init(args=args)
 
     dqn_agent = DQNAgent(stage_num, max_training_episodes)
-    rclpy.spin(dqn_agent)
-
-    dqn_agent.destroy_node()
-    rclpy.shutdown()
+    while dqn_agent.load_episode < dqn_agent.max_training_episodes + 1:
+        print("starting rclpy node...")
+        rclpy.init()
+        rl_node = RLNode(dqn_agent, time_threshold=0.2)
+        # rclpy.spin(rl_node)
+        rl_node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

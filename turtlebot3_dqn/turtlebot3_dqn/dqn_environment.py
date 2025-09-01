@@ -19,6 +19,7 @@
 
 import math
 import os
+import sys
 import time
 
 from geometry_msgs.msg import Twist
@@ -42,7 +43,7 @@ ROS_DISTRO = os.environ.get('ROS_DISTRO')
 
 class RLEnvironment(Node):
 
-    def __init__(self):
+    def __init__(self, return_pose):
         super().__init__('rl_environment')
         self.goal_pose_x = 0.0
         self.goal_pose_y = 0.0
@@ -55,10 +56,14 @@ class RLEnvironment(Node):
         self.done = False
         self.fail = False
         self.succeed = False
+        self.return_pose = return_pose
+
+        self.goal_tolerance = 0.2 # 0.5
+        self.collision_tolerance = 0.15
 
         self.goal_angle = 0.0
         self.goal_distance = 1.0
-        self.init_goal_distance = 0.5
+        self.init_goal_distance = 0.4
         self.scan_ranges = []
         self.front_ranges = []
         self.min_obstacle_distance = 10.0
@@ -146,6 +151,10 @@ class RLEnvironment(Node):
         self.init_goal_distance = state[0]
         self.prev_goal_distance = self.init_goal_distance
         response.state = state
+        if self.return_pose:
+            response.state.append(self.robot_pose_x)
+            response.state.append(self.robot_pose_y)
+            response.state.append(self.robot_pose_theta)
 
         return response
 
@@ -236,7 +245,7 @@ class RLEnvironment(Node):
             state.append(float(var))
         self.local_step += 1
 
-        if self.goal_distance < 0.20:
+        if self.goal_distance < self.goal_tolerance:
             self.get_logger().info('Goal Reached')
             self.succeed = True
             self.done = True
@@ -247,7 +256,7 @@ class RLEnvironment(Node):
             self.local_step = 0
             self.call_task_succeed()
 
-        if self.min_obstacle_distance < 0.15:
+        if self.min_obstacle_distance < self.collision_tolerance:
             self.get_logger().info('Collision happened')
             self.fail = True
             self.done = True
@@ -272,7 +281,7 @@ class RLEnvironment(Node):
         return state
 
     def compute_directional_weights(self, relative_angles, max_weight=10.0):
-        power = 6
+        power = 4
         raw_weights = (numpy.cos(relative_angles))**power + 0.1
         scaled_weights = raw_weights * (max_weight / numpy.max(raw_weights))
         normalized_weights = scaled_weights / numpy.sum(scaled_weights)
@@ -302,16 +311,17 @@ class RLEnvironment(Node):
 
         weighted_decay = numpy.dot(weights, decay)
 
-        reward = - (1.0 + 4.0 * weighted_decay)
+        # reward = - (1.0 + 4.0 * weighted_decay)
+        reward = - weighted_decay
 
         return reward
 
     def calculate_reward(self):
-        yaw_reward = 1 - (2 * abs(self.goal_angle) / math.pi)
-        dist_reward = -abs(self.goal_distance) / 3.5 # note 3.5 is max radar dist
+        yaw_reward = - abs(self.goal_angle / math.pi / 2)
+        dist_reward = 0 # -abs(self.goal_distance) / 3.5 # note 3.5 is max radar dist
         obstacle_reward = self.compute_weighted_obstacle_reward()
-        info_str = f"directional_reward: {yaw_reward:.3f}, dist_reward: {dist_reward:.3f}, obstacle_reward: {obstacle_reward:.3f}"
-        # self.get_logger().info(info_str)
+        info_str = f"directional_reward: {yaw_reward:.3f}, goal_dist: {abs(self.goal_distance):.3f}, obstacle_reward: {obstacle_reward:.3f}"
+        self.get_logger().info(info_str)
         reward = yaw_reward + dist_reward + obstacle_reward
 
         if self.succeed:
@@ -334,27 +344,33 @@ class RLEnvironment(Node):
             msg.twist.angular.z = self.angular_vel[action]
 
         self.cmd_vel_pub.publish(msg)
-        publish_time = time.time()
+        # publish_time = time.time()
         if self.stop_cmd_vel_timer is None:
             self.prev_goal_distance = self.init_goal_distance
-            self.stop_cmd_vel_timer = self.create_timer(1.0, self.timer_callback)
+            self.stop_cmd_vel_timer = self.create_timer(0.8, self.timer_callback)
         else:
             self.destroy_timer(self.stop_cmd_vel_timer)
-            self.stop_cmd_vel_timer = self.create_timer(1.0, self.timer_callback)
+            self.stop_cmd_vel_timer = self.create_timer(0.8, self.timer_callback)
         response.state = self.calculate_state()
-        state_time = time.time()
+        # state_time = time.time()
         response.reward = self.calculate_reward()
-        reward_time = time.time()
+        # reward_time = time.time()
         response.done = self.done
+        if self.return_pose:
+            response.state.append(self.robot_pose_x)
+            response.state.append(self.robot_pose_y)
+            response.state.append(self.robot_pose_theta)
 
         if self.done is True:
             self.done = False
             self.succeed = False
             self.fail = False
-        print_str = (f"publish: {publish_time - start_time:.5f}, "
-                     f"reward_calc: {reward_time - state_time:.5f},"
-                     f"total_time: {time.time() - start_time:.5f}")
-        print(print_str)
+            self.goal_tolerance = max(0.2, self.goal_tolerance - 0.001)
+            self.get_logger().info(f"goal_tolerance update to {self.goal_tolerance}")
+        # print_str = (f"publish: {publish_time - start_time:.5f}, "
+        #              f"reward_calc: {reward_time - state_time:.5f},"
+        #              f"total_time: {time.time() - start_time:.5f}")
+        # print(print_str)
         return response
 
     def timer_callback(self):
@@ -386,8 +402,13 @@ class RLEnvironment(Node):
 
 
 def main(args=None):
+    if args is None:
+        args = sys.argv
+    return_pose = args[1] if len(args) > 1 else '0'
+    return_pose = int(return_pose) == 1
+    print("return_pose:", return_pose)
     rclpy.init(args=args)
-    rl_environment = RLEnvironment()
+    rl_environment = RLEnvironment(return_pose)
     try:
         while rclpy.ok():
             rclpy.spin_once(rl_environment, timeout_sec=0.1)
