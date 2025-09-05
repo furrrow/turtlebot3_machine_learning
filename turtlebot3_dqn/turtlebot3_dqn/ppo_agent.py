@@ -91,7 +91,7 @@ class PPOAgent():
         self.num_iterations: int = 0
         self.iteration = 0
 
-        self.device = torch.device("cuda")
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.global_step = 0
 
         self.batch_size = int(self.num_envs * self.num_steps)
@@ -153,7 +153,8 @@ class PPOAgent():
             pathlib.Path(self.model_dir_path).mkdir(parents=True, exist_ok=True)
 
     def load_checkpoint(self, model_path):
-        checkpoint = torch.load(model_path)
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        checkpoint = torch.load(model_path, map_location=device)
         self.network.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.load_episode = checkpoint['episode']
