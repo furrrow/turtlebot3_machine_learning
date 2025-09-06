@@ -76,6 +76,7 @@ class InferenceNode(RLNode):
         response = self.reset_environment()
         x_y_th = response[0][-3:]
         state = response[:, :-3]
+        state = self.agent.reduce_state(state)
         append_to_dataset(self.h5_file, "state", state)
         append_to_dataset(self.h5_file, "dones", 0, 1)
         state = np.expand_dims(state, axis=1)  # manually inject a 'channel' dim
@@ -102,6 +103,7 @@ class InferenceNode(RLNode):
 
                 # execute the game and log data.
                 next_obs, reward, next_done, x_y_th = self.step(action.item())
+                next_obs = self.agent.reduce_state(next_obs)
                 append_to_dataset(self.h5_file, "reward", reward, 1)
                 next_obs, next_done = torch.Tensor(next_obs).to(self.agent.device), torch.Tensor([next_done]).to(self.agent.device)
                 episode_reward += reward
@@ -129,6 +131,7 @@ class InferenceNode(RLNode):
                     local_step = 0
                     x_y_th = response[0][-3:]
                     state = response[:, :-3]
+                    state = self.agent.reduce_state(state)
                     append_to_dataset(self.h5_file, "next_state", state)
                     state = np.expand_dims(state, axis=1)
                     next_obs = torch.Tensor(state).to(self.agent.device)

@@ -163,6 +163,14 @@ class PPOAgent():
         self.global_step = checkpoint['global_step']
         print(f"model loaded from {model_path}")
 
+    # for when the lidar count is bigger than the state_size
+    def reduce_state(self, original_state):
+        lidar_state = original_state[:, 2:]
+        sample_idxs = np.linspace(0, lidar_state.shape[-1]-1, self.state_size-2)
+        sample_idxs = np.round(sample_idxs).astype(int)
+        sampled_state = np.concatenate([original_state[:, 0:2], lidar_state[:, sample_idxs]], axis=-1)
+        return sampled_state
+
     def log(self, info:dict):
         if self.wandb:
             self.run.log(info, self.global_step)
