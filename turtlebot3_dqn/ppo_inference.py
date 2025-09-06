@@ -37,7 +37,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.categorical import Categorical
 
 from turtlebot3_msgs.srv import Dqn
-from ppo_agent import PPOAgent, RLNode
+from turtlebot3_dqn.ppo_agent import PPOAgent, RLNode
 import h5py
 import wandb
 
@@ -58,10 +58,11 @@ def append_to_dataset(h5db, label, data, data_length=None):
     h5db[label][original_length:new_length] = data
 
 class InferenceNode(RLNode):
-    def __init__(self, ppo_agent: PPOAgent, h5_file, num_episodes, time_threshold=0.2):
+    def __init__(self, ppo_agent: PPOAgent, h5_file, num_episodes, time_threshold=0.2, save_traces=False):
         super().__init__(ppo_agent, time_threshold, spawn_process=False)
         self.h5_file = h5_file
         self.num_episodes = num_episodes
+        self.save_traces = save_traces
         self.rl_process()
 
     def rl_process(self):
@@ -73,12 +74,14 @@ class InferenceNode(RLNode):
         episode_scores = []
 
         current_episode = self.h5_file.attrs['num_episodes']
-        response = self.reset_environment()
-        x_y_th = response[0][-3:]
-        state = response[:, :-3]
+        state = self.reset_environment()
+        if self.save_traces:
+            x_y_th = state[0][-3:]
+            state = state[:, :-3]
         state = self.agent.reduce_state(state)
-        append_to_dataset(self.h5_file, "state", state)
-        append_to_dataset(self.h5_file, "dones", 0, 1)
+        if self.save_traces:
+            append_to_dataset(self.h5_file, "state", state)
+            append_to_dataset(self.h5_file, "dones", 0, 1)
         state = np.expand_dims(state, axis=1)  # manually inject a 'channel' dim
         next_obs = torch.Tensor(state).to(self.agent.device)  # manually inject a 'channel' dim
         next_done = torch.zeros(self.agent.num_envs).to(self.agent.device)
@@ -89,22 +92,23 @@ class InferenceNode(RLNode):
             while True:
                 step_start = time.time()
                 self.agent.global_step += self.agent.num_envs
-                append_to_dataset(self.h5_file, "x", x_y_th[0], 1)
-                append_to_dataset(self.h5_file, "y", x_y_th[1], 1)
-                append_to_dataset(self.h5_file, "theta", x_y_th[2], 1)
-                append_to_dataset(self.h5_file, "dt", time.time() - episode_start, 1)
-                append_to_dataset(self.h5_file, "step", local_step, 1)
 
                 # ALGO LOGIC: action logic
                 with torch.no_grad():
                     # action, logprob, _, value, explore = self.agent.network.get_action_and_value(next_obs)
                     action = self.agent.network.get_greedy_action(next_obs)
-                append_to_dataset(self.h5_file, "action", action.item(), 1)
 
                 # execute the game and log data.
                 next_obs, reward, next_done, x_y_th = self.step(action.item())
                 next_obs = self.agent.reduce_state(next_obs)
-                append_to_dataset(self.h5_file, "reward", reward, 1)
+                if self.save_traces:
+                    append_to_dataset(self.h5_file, "x", x_y_th[0], 1)
+                    append_to_dataset(self.h5_file, "y", x_y_th[1], 1)
+                    append_to_dataset(self.h5_file, "theta", x_y_th[2], 1)
+                    append_to_dataset(self.h5_file, "dt", time.time() - episode_start, 1)
+                    append_to_dataset(self.h5_file, "step", local_step, 1)
+                    append_to_dataset(self.h5_file, "action", action.item(), 1)
+                    append_to_dataset(self.h5_file, "reward", reward, 1)
                 next_obs, next_done = torch.Tensor(next_obs).to(self.agent.device), torch.Tensor([next_done]).to(self.agent.device)
                 episode_reward += reward
                 if abs(reward) > 10:
@@ -126,13 +130,15 @@ class InferenceNode(RLNode):
                     current_episode += 1
                     episode_reward = 0
                     self.h5_file.attrs['num_episodes'] = current_episode
-                    response = self.reset_environment()
+                    state = self.reset_environment()
                     episode_start = time.time()
                     local_step = 0
-                    x_y_th = response[0][-3:]
-                    state = response[:, :-3]
+                    if self.save_traces:
+                        x_y_th = state[0][-3:]
+                        state = state[:, :-3]
                     state = self.agent.reduce_state(state)
-                    append_to_dataset(self.h5_file, "next_state", state)
+                    if self.save_traces:
+                        append_to_dataset(self.h5_file, "next_state", state)
                     state = np.expand_dims(state, axis=1)
                     next_obs = torch.Tensor(state).to(self.agent.device)
                     next_done = torch.zeros(self.agent.num_envs).to(self.agent.device)
@@ -172,15 +178,18 @@ def main(args=None):
         args = sys.argv
     stage_num = args[1] if len(args) > 1 else '2'
     max_training_episodes = args[2] if len(args) > 2 else '1000'
+    save_traces = args[3] if len(args) > 3 else '0'
 
+    save_traces = int(save_traces) == 1
     ppo_agent = PPOAgent(stage_num, max_training_episodes, use_wandb=False, make_save_folder=False)
-    model_path = "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/turtlebot3_dqn/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
+    model_path = "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
     ppo_agent.load_checkpoint(model_path)
     ppo_agent.global_step = 0
     num_episodes = 100
     episode = 0
 
     # dataset for trajectories & actions
+    print(f"save traces:{save_traces}")
     h5_name = "Aug27_traces"
     h5_name = f"{h5_name}.hdf5"
     if os.path.exists(h5_name):
@@ -204,7 +213,7 @@ def main(args=None):
     while episode < num_episodes:
         print("starting rclpy node...")
         rclpy.init()
-        rl_node = InferenceNode(ppo_agent, traj_h5, num_episodes, time_threshold=0.12)
+        rl_node = InferenceNode(ppo_agent, traj_h5, num_episodes, time_threshold=0.12, save_traces=save_traces)
         # rclpy.spin(rl_node)
         rl_node.destroy_node()
         rclpy.shutdown()

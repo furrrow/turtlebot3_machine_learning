@@ -491,7 +491,7 @@ def main(args=None):
     max_training_episodes = args[2] if len(args) > 2 else '1000'
 
     ppo_agent = PPOAgent(stage_num, max_training_episodes, use_wandb=False)
-    model_path = "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/turtlebot3_dqn/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
+    model_path = "../saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
     ppo_agent.load_checkpoint(model_path)
     while ppo_agent.global_step < ppo_agent.total_timesteps:
         print("starting rclpy node...")
