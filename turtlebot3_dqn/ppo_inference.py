@@ -177,15 +177,15 @@ def main(args=None):
     if args is None:
         args = sys.argv
     stage_num = args[1] if len(args) > 1 else '2'
-    max_training_episodes = args[2] if len(args) > 2 else '1000'
+    num_episodes = args[2] if len(args) > 2 else '100'
     save_traces = args[3] if len(args) > 3 else '0'
 
     save_traces = int(save_traces) == 1
-    ppo_agent = PPOAgent(stage_num, max_training_episodes, use_wandb=False, make_save_folder=False)
+    num_episodes = int(num_episodes)
+    ppo_agent = PPOAgent(stage_num, use_wandb=False, make_save_folder=False)
     model_path = "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
     ppo_agent.load_checkpoint(model_path)
     ppo_agent.global_step = 0
-    num_episodes = 100
     episode = 0
 
     # dataset for trajectories & actions

@@ -37,6 +37,7 @@ setup(
             'ppo_agent = turtlebot3_dqn.ppo_agent:main',
             'ppo_inference = turtlebot3_dqn.ppo_inference:main',
             'dqn_environment = turtlebot3_dqn.dqn_environment:main',
+            'live_environment = turtlebot3_dqn.live_environment:main',
             'dqn_gazebo = turtlebot3_dqn.dqn_gazebo:main',
             'dqn_test = turtlebot3_dqn.dqn_test:main',
             'result_graph = turtlebot3_dqn.result_graph:main',
