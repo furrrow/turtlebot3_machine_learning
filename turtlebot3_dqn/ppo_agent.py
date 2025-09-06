@@ -54,14 +54,13 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 class PPOAgent():
 
-    def __init__(self, stage_num, max_training_episodes, use_wandb=True, make_save_folder=True):
+    def __init__(self, stage_num, use_wandb=True, make_save_folder=True):
         super().__init__()
 
         self.stage = int(stage_num)
         self.wandb = use_wandb
         self.state_size = 26 # 180+2 corresponds to 360 samples, originally 26
         self.action_size = 5
-        self.max_training_episodes = int(max_training_episodes)
         self.wandb_project_name: str = "PPO_turtlebot3"
 
         self.done = False
@@ -488,9 +487,8 @@ def main(args=None):
     if args is None:
         args = sys.argv
     stage_num = args[1] if len(args) > 1 else '1'
-    max_training_episodes = args[2] if len(args) > 2 else '1000'
 
-    ppo_agent = PPOAgent(stage_num, max_training_episodes, use_wandb=False)
+    ppo_agent = PPOAgent(stage_num, use_wandb=False)
     model_path = "../saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
     ppo_agent.load_checkpoint(model_path)
     while ppo_agent.global_step < ppo_agent.total_timesteps:
