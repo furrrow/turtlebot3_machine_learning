@@ -71,6 +71,7 @@ class RLEnvironment(Node):
 
         self.local_step = 0
         self.stop_cmd_vel_timer = None
+        self.linear_velocity = 0.2
         self.angular_vel = [1.5, 0.75, 0.0, -0.75, -1.5]
 
         qos = QoSProfile(depth=10)
@@ -336,11 +337,11 @@ class RLEnvironment(Node):
         action = request.action
         if ROS_DISTRO == 'humble':
             msg = Twist()
-            msg.linear.x = 0.2
+            msg.linear.x = self.linear_velocity
             msg.angular.z = self.angular_vel[action]
         else:
             msg = TwistStamped()
-            msg.twist.linear.x = 0.2
+            msg.twist.linear.x = self.linear_velocity
             msg.twist.angular.z = self.angular_vel[action]
 
         self.cmd_vel_pub.publish(msg)
