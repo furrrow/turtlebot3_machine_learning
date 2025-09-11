@@ -15,15 +15,30 @@ from zipfile import ZipFile
 import matplotlib.pyplot as plt
 
 def main():
-    # h5_path = "ppo_stage3_sample_traces.hdf5"  # change this!
-    h5_path = "ppo_stage3_episode1839_traces.hdf5"  # change this!
-    # goal_csv = "ppo_stage3_sample_goals.csv"
-    goal_csv = "091125_0011_goals.csv"
-    visualize = False
+    h5_path = "ppo_stage3_sample_traces.hdf5"  # change this!
+    goal_csv = "ppo_stage3_sample_goals.csv"
+    goal_csv = None
+    # h5_path = "ppo_stage2_episode1761_traces.hdf5"
+    # goal_csv = "091025_2108_goals.csv"
+    # h5_path = "ppo_stage3_episode309_traces.hdf5"
+    # goal_csv = "091025_2132_goals.csv"
+    # h5_path = "ppo_stage3_episode409_traces.hdf5"
+    # goal_csv = "091025_2211_goals.csv"
+    # h5_path = "ppo_stage3_episode717_traces.hdf5"
+    # goal_csv = "091025_2252_goals.csv"
+    # h5_path = "ppo_stage3_episode1024_traces.hdf5"
+    # goal_csv = "091025_2327_goals.csv"
+    # h5_path = "ppo_stage3_episode1532_traces.hdf5"
+    # goal_csv = "091025_2350_goals.csv"
+    # h5_path = "ppo_stage3_episode1839_traces.hdf5"
+    # goal_csv = "091125_0011_goals.csv"
+
+    visualize = True
     verbose = False
 
     f = h5py.File(h5_path, "r")
-    goal_arr = np.loadtxt(goal_csv, delimiter=",", dtype=float)
+    if goal_csv:
+        goal_arr = np.loadtxt(goal_csv, delimiter=",", dtype=float)
     keys_list = list(f.keys())
     # ['action', 'dones', 'dt', 'next_state', 'reward', 'state', 'step', 'theta', 'x', 'y']
     print(keys_list)
@@ -82,7 +97,8 @@ def main():
                 axes.add_artist(rect)
                 plt.title('Trajectory Visualization')
                 plt.scatter(x, y)
-                plt.scatter(goal_arr[episode_num][0], goal_arr[episode_num][1], marker='x')
+                if goal_csv:
+                    plt.scatter(goal_arr[episode_num][0], goal_arr[episode_num][1], marker='x')
                 plt.show()
             cumulative_reward = sum(f['reward'][last_i:i+1])[0]
             csv_entries = i - last_i + 1
