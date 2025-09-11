@@ -22,6 +22,7 @@ import random
 import subprocess
 import sys
 import time
+import numpy as np
 
 from ament_index_python.packages import get_package_share_directory
 import rclpy
@@ -41,13 +42,13 @@ if ROS_DISTRO == 'humble':
 
 class GazeboInterface(Node):
 
-    def __init__(self, stage_num):
+    def __init__(self, stage_num, save_goal, complete_reset):
         super().__init__('gazebo_interface')
         self.stage = int(stage_num)
 
         self.entity_name = 'goal_box'
-        self.entity_pose_x = 0.5
-        self.entity_pose_y = 0.0
+        self.entity_pose_x = 1.7
+        self.entity_pose_y = 1.7
 
         if ROS_DISTRO == 'humble':
             self.entity = None
@@ -75,6 +76,16 @@ class GazeboInterface(Node):
             self.task_failed_callback,
             callback_group=self.callback_group
         )
+        self.save_goal = save_goal
+        self.complete_reset = complete_reset
+        self.csv_file = False
+
+        if self.save_goal:
+            import datetime
+            import csv
+            time_str = datetime.datetime.now().strftime('%m%d%y_%H%M')
+            csv_name = f"{time_str}_goals.csv"
+            self.csv_file = open(csv_name, 'a+', newline='')
 
     def open_entity(self):
         try:
@@ -132,6 +143,10 @@ class GazeboInterface(Node):
                 print(f'Spawn Goal at ({self.entity_pose_x}, {self.entity_pose_y}, {0.0})')
             except subprocess.CalledProcessError:
                 pass
+        if self.save_goal:
+            import csv
+            write = csv.writer(self.csv_file)
+            write.writerows([[self.entity_pose_x, self.entity_pose_y]])
 
     def delete_entity(self):
         if ROS_DISTRO == 'humble':
@@ -210,6 +225,12 @@ class GazeboInterface(Node):
     def task_succeed_callback(self, request, response):
         self.delete_entity()
         time.sleep(0.2)
+        if self.complete_reset:
+            if ROS_DISTRO == 'humble':
+                self.reset_simulation()
+            else:
+                self.reset_burger()
+                time.sleep(0.2)
         self.generate_goal_pose()
         time.sleep(0.2)
         self.spawn_entity()
@@ -250,8 +271,11 @@ class GazeboInterface(Node):
 
     def generate_goal_pose(self):
         if self.stage != 4:
-            self.entity_pose_x = random.randrange(-21, 21) / 10
-            self.entity_pose_y = random.randrange(-21, 21) / 10
+            map_range = np.arange(-21, 21)
+            entity = np.random.choice(map_range, size=2, replace=True)/10
+            while np.linalg.norm(np.abs(entity) - np.array([0, 0])) < 1.1:
+                entity = np.random.choice(map_range, size=2, replace=True) / 10
+            self.entity_pose_x, self.entity_pose_y = entity[0], entity[1]
         else:
             goal_pose_list = [
                 [1.0, 0.0], [2.0, -1.5], [0.0, -2.0], [2.0, 1.5], [0.5, 2.0], [-1.5, 2.1],
@@ -265,7 +289,14 @@ class GazeboInterface(Node):
 def main(args=None):
     rclpy.init(args=sys.argv)
     stage_num = sys.argv[1] if len(sys.argv) > 1 else '1'
-    gazebo_interface = GazeboInterface(stage_num)
+    save_goal = sys.argv[1] if len(sys.argv) > 2 else '1'
+    complete_reset = sys.argv[1] if len(sys.argv) > 3 else '1'
+
+    save_goal = int(save_goal) == 1
+    complete_reset = int(complete_reset) == 1
+    gazebo_interface = GazeboInterface(stage_num, save_goal, complete_reset)
+    print("save_goal:", save_goal)
+    print("complete_reset:", complete_reset)
     try:
         while rclpy.ok():
             rclpy.spin_once(gazebo_interface, timeout_sec=0.1)

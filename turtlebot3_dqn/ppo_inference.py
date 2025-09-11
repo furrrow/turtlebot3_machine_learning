@@ -120,12 +120,12 @@ class InferenceNode(RLNode):
                 step_duration_array[self.agent.global_step % 10] = step_duration
 
                 if next_done:
-                    if local_step < 2:
-                        print(f"only one step, skipping ->: "
+                    if local_step < 3:
+                        print(f"too few steps, skipping ->: "
                               f"episode {current_episode} score {episode_reward:.3f} in {local_step} steps")
                         continue
                     self.agent.log({"score": episode_reward, "episode_steps": local_step})
-                    print(f"episode {current_episode} score {episode_reward:.3f} in {local_step} steps")
+                    print(f"episode {current_episode} final reward {reward:.3f} score {episode_reward:.3f} in {local_step} steps")
                     episode_scores.append(episode_reward)
                     current_episode += 1
                     episode_reward = 0
@@ -178,46 +178,56 @@ def main(args=None):
         args = sys.argv
     stage_num = args[1] if len(args) > 1 else '2'
     num_episodes = args[2] if len(args) > 2 else '100'
-    save_traces = args[3] if len(args) > 3 else '0'
+    save_traces = args[3] if len(args) > 3 else '1'
 
     save_traces = int(save_traces) == 1
     num_episodes = int(num_episodes)
     ppo_agent = PPOAgent(stage_num, use_wandb=False, make_save_folder=False)
-    model_path = "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
-    ppo_agent.load_checkpoint(model_path)
-    ppo_agent.global_step = 0
-    episode = 0
+    model_list = [
+        "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5",
+        # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_1820/ppo_stage3_episode309.h5",
+        # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode409.h5",
+        # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode717.h5",
+        # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode1024.h5",
+        # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode1532.h5",
+        # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode1839.h5",
+    ]
 
-    # dataset for trajectories & actions
-    print(f"save traces:{save_traces}")
-    h5_name = "Aug27_traces"
-    h5_name = f"{h5_name}.hdf5"
-    if os.path.exists(h5_name):
-        print(f"{h5_name} exists, removing...")
-        os.remove(f"{h5_name}")
-    traj_h5 = h5py.File(f"{h5_name}", 'w')
-    traj_h5.create_dataset("state", shape=(0, ppo_agent.state_size), maxshape=(None, ppo_agent.state_size), dtype=np.float32)
-    traj_h5.create_dataset("next_state", shape=(0, ppo_agent.state_size), maxshape=(None, ppo_agent.state_size), dtype=np.float32)
-    traj_h5.create_dataset("action", shape=(0, 1), maxshape=(None, 1), dtype=np.uint8)
-    traj_h5.create_dataset("reward", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
-    traj_h5.create_dataset("dones", shape=(0, 1), maxshape=(None, 1), dtype=np.uint8)
-    traj_h5.create_dataset("x", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
-    traj_h5.create_dataset("y", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
-    traj_h5.create_dataset("theta", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
-    traj_h5.create_dataset("dt", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
-    traj_h5.create_dataset("step", shape=(0, 1), maxshape=(None, 1), dtype=np.uint64)
-    # adding some metadata
-    traj_h5.attrs['model_path'] = model_path
-    traj_h5.attrs['num_episodes'] = 0
+    for model_path in model_list:
+        ppo_agent.load_checkpoint(model_path)
+        ppo_agent.global_step = 0
+        episode = 0
 
-    while episode < num_episodes:
-        print("starting rclpy node...")
-        rclpy.init()
-        rl_node = InferenceNode(ppo_agent, traj_h5, num_episodes, time_threshold=0.12, save_traces=save_traces)
-        # rclpy.spin(rl_node)
-        rl_node.destroy_node()
-        rclpy.shutdown()
-        episode = traj_h5.attrs['num_episodes']
+        # dataset for trajectories & actions
+        print(f"save traces:{save_traces}")
+        h5_name = f"{os.path.split(model_path)[-1][:-3]}_traces"
+        h5_name = f"{h5_name}.hdf5"
+        if os.path.exists(h5_name):
+            print(f"{h5_name} exists, removing...")
+            os.remove(f"{h5_name}")
+        traj_h5 = h5py.File(f"{h5_name}", 'w')
+        traj_h5.create_dataset("state", shape=(0, ppo_agent.state_size), maxshape=(None, ppo_agent.state_size), dtype=np.float32)
+        traj_h5.create_dataset("next_state", shape=(0, ppo_agent.state_size), maxshape=(None, ppo_agent.state_size), dtype=np.float32)
+        traj_h5.create_dataset("action", shape=(0, 1), maxshape=(None, 1), dtype=np.uint8)
+        traj_h5.create_dataset("reward", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
+        traj_h5.create_dataset("dones", shape=(0, 1), maxshape=(None, 1), dtype=np.uint8)
+        traj_h5.create_dataset("x", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
+        traj_h5.create_dataset("y", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
+        traj_h5.create_dataset("theta", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
+        traj_h5.create_dataset("dt", shape=(0, 1), maxshape=(None, 1), dtype=np.float32)
+        traj_h5.create_dataset("step", shape=(0, 1), maxshape=(None, 1), dtype=np.uint64)
+        # adding some metadata
+        traj_h5.attrs['model_path'] = model_path
+        traj_h5.attrs['num_episodes'] = 0
+
+        while episode < num_episodes:
+            print("starting rclpy node...")
+            rclpy.init()
+            rl_node = InferenceNode(ppo_agent, traj_h5, num_episodes, time_threshold=0.12, save_traces=save_traces)
+            # rclpy.spin(rl_node)
+            rl_node.destroy_node()
+            rclpy.shutdown()
+            episode = traj_h5.attrs['num_episodes']
 
 
 if __name__ == '__main__':

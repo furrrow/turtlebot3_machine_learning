@@ -12,11 +12,12 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 def main():
-    h5_path = "ppo_stage3_episode717_traces.hdf5" # change this!
-    goal_csv = "091025_1936_goals.csv"
-    trace_number = 0
+    h5_path = "ppo_stage3_sample_traces.hdf5"  # change this!
+    goal_csv = "ppo_stage3_sample_goals.csv"
+    visualize = False
+
     f = h5py.File(h5_path, "r")
-    goal_arr = np.loadtxt(goal_csv, delimiter=",", dtype=str)
+    goal_arr = np.loadtxt(goal_csv, delimiter=",", dtype=float)
     keys_list = list(f.keys())
     # ['action', 'dones', 'dt', 'next_state', 'reward', 'state', 'step', 'theta', 'x', 'y']
     print(keys_list)
@@ -45,35 +46,36 @@ def main():
         else:
             terminal = False
         if terminal:
-            # data = [f[key][last_i:i+1] for key in keys_to_extract]
-            # csv_file_name = f"../csvs/trace_records{len(rewards_list)}.csv"
-            # data = np.array(data).squeeze(-1).T
-            # np.savetxt(csv_file_name, data, delimiter=",")
-            x = f['x'][last_i:i+1]
-            y = f['y'][last_i:i+1]
-            figure, axes = plt.subplots()
-            axes.set_xlim([-2.5, 2.5])
-            axes.set_ylim([-2.5, 2.5])
-            circle1 = plt.Circle((1, 1), 0.1, color='b')
-            circle2 = plt.Circle((-1, 1), 0.1, color='b')
-            circle3 = plt.Circle((1, -1), 0.1, color='b')
-            circle4 = plt.Circle((-1, -1), 0.1, color='b')
-            rect = plt.Rectangle((-2.3, -2.3), width=4.6, height=4.6, edgecolor='brown', fill=False)
-            axes.set_aspect(1)
-            axes.add_artist(circle1)
-            axes.add_artist(circle2)
-            axes.add_artist(circle3)
-            axes.add_artist(circle4)
-            axes.add_artist(rect)
-            plt.title('Colored Circle')
-            plt.plot(x, y)
-            plt.scatter(goal_arr[episode_num][0], goal_arr[episode_num][1])
-            plt.show()
+            data = [f[key][last_i:i+1] for key in keys_to_extract]
+            csv_file_name = f"../csvs/trace_records{len(rewards_list)}.csv"
+            data = np.array(data).squeeze(-1).T
+            np.savetxt(csv_file_name, data, delimiter=",")
+            if visualize:
+                x = f['x'][last_i:i + 1]
+                y = f['y'][last_i:i + 1]
+                figure, axes = plt.subplots()
+                axes.set_xlim([-2.5, 2.5])
+                axes.set_ylim([-2.5, 2.5])
+                circle1 = plt.Circle((1, 1), 0.1, color='gray')
+                circle2 = plt.Circle((-1, 1), 0.1, color='gray')
+                circle3 = plt.Circle((1, -1), 0.1, color='gray')
+                circle4 = plt.Circle((-1, -1), 0.1, color='gray')
+                rect = plt.Rectangle((-2.3, -2.3), width=4.6, height=4.6, edgecolor='brown', fill=False)
+                axes.set_aspect(1)
+                axes.add_artist(circle1)
+                axes.add_artist(circle2)
+                axes.add_artist(circle3)
+                axes.add_artist(circle4)
+                axes.add_artist(rect)
+                plt.title('Trajectory Visualization')
+                plt.scatter(x, y)
+                plt.scatter(goal_arr[episode_num][0], goal_arr[episode_num][1], marker='x')
+                plt.show()
             cumulative_reward = sum(f['reward'][last_i:i+1])[0]
             csv_entries = i - last_i + 1
             success_tally.append(f['reward'][i][0] > 90)
             rewards_list.append(cumulative_reward)
-            # print(f"end of epoch {len(rewards_list)}, score: {cumulative_reward:.3f}, {csv_entries} steps saved to {csv_file_name}")
+            print(f"end of epoch {len(rewards_list)}, score: {cumulative_reward:.3f}, {csv_entries} steps saved to {csv_file_name}")
             last_i = i
             episode_num += 1
             continue

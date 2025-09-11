@@ -51,11 +51,12 @@ class RLEnvironment(Node):
         self.robot_pose_y = 0.0
 
         self.action_size = 5
-        self.max_step = 800
+        self.max_step = 1600
 
         self.done = False
         self.fail = False
         self.succeed = False
+        self.timeout = False
         self.return_pose = return_pose
 
         self.goal_tolerance = 0.2 # 0.5
@@ -73,6 +74,9 @@ class RLEnvironment(Node):
         self.stop_cmd_vel_timer = None
         self.linear_velocity = 0.2
         self.angular_vel = [1.5, 0.75, 0.0, -0.75, -1.5]
+        self.last_angular_z = 0
+        self.angular_z = 0
+
 
         qos = QoSProfile(depth=10)
 
@@ -219,6 +223,7 @@ class RLEnvironment(Node):
     def odom_sub_callback(self, msg):
         self.robot_pose_x = msg.pose.pose.position.x
         self.robot_pose_y = msg.pose.pose.position.y
+        self.angular_z = msg.twist.twist.angular.z
         _, _, self.robot_pose_theta = self.euler_from_quaternion(msg.pose.pose.orientation)
 
         goal_distance = math.sqrt(
@@ -260,6 +265,7 @@ class RLEnvironment(Node):
         if self.min_obstacle_distance < self.collision_tolerance:
             self.get_logger().info('Collision happened')
             self.fail = True
+            self.timeout = False
             self.done = True
             if ROS_DISTRO == 'humble':
                 self.cmd_vel_pub.publish(Twist())
@@ -271,6 +277,7 @@ class RLEnvironment(Node):
         if self.local_step == self.max_step:
             self.get_logger().info('Time out!')
             self.fail = True
+            self.timeout = True
             self.done = True
             if ROS_DISTRO == 'humble':
                 self.cmd_vel_pub.publish(Twist())
@@ -405,9 +412,11 @@ class RLEnvironment(Node):
 def main(args=None):
     if args is None:
         args = sys.argv
-    return_pose = args[1] if len(args) > 1 else '0'
+    return_pose = args[1] if len(args) > 1 else '1'
     return_pose = int(return_pose) == 1
+
     print("return_pose:", return_pose)
+
     rclpy.init(args=args)
     rl_environment = RLEnvironment(return_pose)
     try:
