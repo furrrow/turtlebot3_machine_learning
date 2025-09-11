@@ -184,13 +184,13 @@ def main(args=None):
     num_episodes = int(num_episodes)
     ppo_agent = PPOAgent(stage_num, use_wandb=False, make_save_folder=False)
     model_list = [
-        "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5",
+        # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5",
         # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_1820/ppo_stage3_episode309.h5",
         # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode409.h5",
         # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode717.h5",
         # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode1024.h5",
         # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode1532.h5",
-        # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode1839.h5",
+        "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__090825_2055/ppo_stage3_episode1839.h5",
     ]
 
     for model_path in model_list:

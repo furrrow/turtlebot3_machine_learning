@@ -12,8 +12,10 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 def main():
-    h5_path = "ppo_stage3_sample_traces.hdf5"  # change this!
-    goal_csv = "ppo_stage3_sample_goals.csv"
+    # h5_path = "ppo_stage3_sample_traces.hdf5"  # change this!
+    h5_path = "ppo_stage3_episode1839_traces.hdf5"  # change this!
+    # goal_csv = "ppo_stage3_sample_goals.csv"
+    goal_csv = "091125_0011_goals.csv"
     visualize = False
 
     f = h5py.File(h5_path, "r")
