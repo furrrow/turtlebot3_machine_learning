@@ -5,10 +5,13 @@ installing the h5ls utility on terminal may also be helpful
 h5py docs: https://docs.h5py.org/en/stable/quick.html
 
 """
+import os
+
 import h5py
 import numpy as np
 import csv
 from tqdm import tqdm
+from zipfile import ZipFile
 import matplotlib.pyplot as plt
 
 def main():
@@ -17,6 +20,7 @@ def main():
     # goal_csv = "ppo_stage3_sample_goals.csv"
     goal_csv = "091125_0011_goals.csv"
     visualize = False
+    verbose = False
 
     f = h5py.File(h5_path, "r")
     goal_arr = np.loadtxt(goal_csv, delimiter=",", dtype=float)
@@ -30,17 +34,23 @@ def main():
     num_entries = f[keys_list[-1]].len()
     print(f"total of {num_entries} entries")
 
-    # one may directly access an element
-    print(f['x'][100])
+    csv_dir = f"../csvs/"
+    os.makedirs(os.path.dirname(csv_dir), exist_ok=True)
+    zip_file_name = f"{h5_path[:-5]}_csvs.zip"
+    print(f"emptying csv_dir {csv_dir}")
+    for filename in tqdm(os.listdir(csv_dir)):
+        if filename[-4:] == ".csv":
+            os.remove(os.path.join(os.getcwd(), csv_dir, filename))
 
     # **analysis** taking a look at how many episodes, success rate, and cumulative reward for each.
     rewards_list = []
     success_tally = []
+    file_paths = []
     last_i = 0
     episode_num = 0
 
     keys_to_extract = ['step', 'x', 'y', 'theta', 'dt']
-    for i in range(num_entries):
+    for i in tqdm(range(num_entries), disable=verbose):
         if i == num_entries-1:
             terminal = True
         elif f['step'][i + 1][0] == 0:
@@ -49,7 +59,8 @@ def main():
             terminal = False
         if terminal:
             data = [f[key][last_i:i+1] for key in keys_to_extract]
-            csv_file_name = f"../csvs/trace_records{len(rewards_list)}.csv"
+            csv_file_name = f"{csv_dir}trace_records{len(rewards_list)}.csv"
+            file_paths.append(os.path.join(os.getcwd(), csv_file_name))
             data = np.array(data).squeeze(-1).T
             np.savetxt(csv_file_name, data, delimiter=",")
             if visualize:
@@ -77,13 +88,19 @@ def main():
             csv_entries = i - last_i + 1
             success_tally.append(f['reward'][i][0] > 90)
             rewards_list.append(cumulative_reward)
-            print(f"end of epoch {len(rewards_list)}, score: {cumulative_reward:.3f}, {csv_entries} steps saved to {csv_file_name}")
+            if verbose:
+                print(f"end of epoch {len(rewards_list)}, score: {cumulative_reward:.3f}, {csv_entries} steps saved to {csv_file_name}")
             last_i = i
             episode_num += 1
             continue
     success_rate = np.sum(np.array(success_tally) > 0) / len(rewards_list)
     print(f"success rate: {success_rate:.3f}")
     print(f"keys extracted:{keys_to_extract}")
+    # opening the zip file in READ mode
+    with ZipFile(zip_file_name, 'w') as zip:
+        for file in file_paths:
+            zip.write(file)
+    print(f"csvs compressed to: {zip_file_name}")
 
 
 if __name__ == '__main__':
