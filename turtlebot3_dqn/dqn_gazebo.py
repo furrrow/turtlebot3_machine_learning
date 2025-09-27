@@ -273,7 +273,7 @@ class GazeboInterface(Node):
         if self.stage != 4:
             map_range = np.arange(-21, 21)
             entity = np.random.choice(map_range, size=2, replace=True)/10
-            while np.linalg.norm(np.abs(entity) - np.array([0, 0])) < 1.1:
+            while np.linalg.norm(np.abs(entity) - np.array([0, 0])) < 1.1 or np.linalg.norm(np.abs(entity) - np.array([1, 1])) < 0.2:
                 entity = np.random.choice(map_range, size=2, replace=True) / 10
             self.entity_pose_x, self.entity_pose_y = entity[0], entity[1]
         else:
@@ -288,8 +288,8 @@ class GazeboInterface(Node):
 
 def main(args=None):
     rclpy.init(args=sys.argv)
-    stage_num = sys.argv[1] if len(sys.argv) > 1 else '1'
-    save_goal = sys.argv[1] if len(sys.argv) > 2 else '1'
+    stage_num = sys.argv[1] if len(sys.argv) > 1 else '2'
+    save_goal = sys.argv[1] if len(sys.argv) > 2 else '0'
     complete_reset = sys.argv[1] if len(sys.argv) > 3 else '1'
 
     save_goal = int(save_goal) == 1

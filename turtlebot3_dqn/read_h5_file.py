@@ -15,23 +15,10 @@ from zipfile import ZipFile
 import matplotlib.pyplot as plt
 
 def main():
-    h5_path = "ppo_stage3_sample_traces.hdf5"  # change this!
-    goal_csv = "ppo_stage3_sample_goals.csv"
-    goal_csv = None
-    # h5_path = "ppo_stage2_episode1761_traces.hdf5"
-    # goal_csv = "091025_2108_goals.csv"
-    # h5_path = "ppo_stage3_episode309_traces.hdf5"
-    # goal_csv = "091025_2132_goals.csv"
-    # h5_path = "ppo_stage3_episode409_traces.hdf5"
-    # goal_csv = "091025_2211_goals.csv"
-    # h5_path = "ppo_stage3_episode717_traces.hdf5"
-    # goal_csv = "091025_2252_goals.csv"
-    # h5_path = "ppo_stage3_episode1024_traces.hdf5"
-    # goal_csv = "091025_2327_goals.csv"
-    # h5_path = "ppo_stage3_episode1532_traces.hdf5"
-    # goal_csv = "091025_2350_goals.csv"
-    # h5_path = "ppo_stage3_episode1839_traces.hdf5"
-    # goal_csv = "091125_0011_goals.csv"
+    h5_path = "ppo_stage3_episode101_traces.hdf5"  # change this!
+    goal_csv = "091225_1733_goals.csv"
+    # h5_path = "ppo_stage2_episode533_traces.hdf5"
+    # goal_csv = "stage2_ep533_091425_1826_goals.csv"
 
     visualize = True
     verbose = False
@@ -64,7 +51,7 @@ def main():
     last_i = 0
     episode_num = 0
 
-    keys_to_extract = ['step', 'x', 'y', 'theta', 'dt']
+    keys_to_extract = ['step', 'x', 'y', 'theta', 'dt', 'reward']
     for i in tqdm(range(num_entries), disable=verbose):
         if i == num_entries-1:
             terminal = True
@@ -106,7 +93,7 @@ def main():
             rewards_list.append(cumulative_reward)
             if verbose:
                 print(f"end of epoch {len(rewards_list)}, score: {cumulative_reward:.3f}, {csv_entries} steps saved to {csv_file_name}")
-            last_i = i
+            last_i = i + 1
             episode_num += 1
             continue
     success_rate = np.sum(np.array(success_tally) > 0) / len(rewards_list)

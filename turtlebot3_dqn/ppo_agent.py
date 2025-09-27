@@ -33,7 +33,7 @@ from std_srvs.srv import Empty
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
+import torch.optim.lr_scheduler as lr_scheduler
 from torch.distributions.categorical import Categorical
 
 from turtlebot3_msgs.srv import Dqn
@@ -68,8 +68,8 @@ class PPOAgent():
         self.fail = False
         self.load_model = True
 
-        self.total_timesteps: int = 500000
-        self.learning_rate: float = 5.0e-4
+        self.total_timesteps: int = 1000000
+        self.learning_rate: float = 3e-4
         self.num_envs: int = 1
         self.num_steps: int = 2056
         self.anneal_lr: bool = True
@@ -128,7 +128,9 @@ class PPOAgent():
                 save_code=True,
             )
         self.network = Agent(self.state_size, self.action_size).to(self.device)
-        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=self.learning_rate, eps=1e-5)
+        self.optimizer = torch.optim.AdamW(self.network.parameters(), lr=self.learning_rate, eps=1e-5)
+        # self.scheduler = lr_scheduler.LinearLR(self.optimizer, start_factor=1.0, end_factor=0.3, total_iters=10)
+        self.scheduler = lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=10, T_mult=2, eta_min=5e-8)
 
         # ALGO Logic: Storage setup
         self.obs = torch.zeros((self.num_steps, self.num_envs) + (self.state_size,)).to(self.device)
@@ -155,11 +157,11 @@ class PPOAgent():
         device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         checkpoint = torch.load(model_path, map_location=device)
         self.network.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.load_episode = checkpoint['episode']
-        self.last_save_episode = checkpoint['episode']
-        self.iteration = checkpoint['iteration']
-        self.global_step = checkpoint['global_step']
+        # self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        # self.load_episode = checkpoint['episode']
+        # self.last_save_episode = checkpoint['episode']
+        # self.iteration = checkpoint['iteration']
+        # self.global_step = checkpoint['global_step']
         print(f"model loaded from {model_path}")
 
     # for when the lidar count is bigger than the state_size
@@ -189,13 +191,14 @@ class RLNode(Node):
     def rl_process(self):
         self.env_make()
         time.sleep(1.0)
-        episode_reward = 0
         step_duration_array = np.zeros(10)
         episode_scores = []
 
         episode_num = self.agent.load_episode
         iteration_num = self.agent.iteration
         state = self.reset_environment()
+        state = self.agent.reduce_state(state)
+        episode_reward = 0
         state = np.expand_dims(state, axis=1)  # manually inject a 'channel' dim
         next_obs = torch.Tensor(state).to(self.agent.device)  # manually inject a 'channel' dim
         next_done = torch.zeros(self.agent.num_envs).to(self.agent.device)
@@ -204,11 +207,6 @@ class RLNode(Node):
         for iteration in range(iteration_num, self.agent.num_iterations + 1):
             episode_start = time.time()
             local_step = 0
-            # Annealing the rate if instructed to do so.
-            if self.agent.anneal_lr:
-                frac = 1.0 - (iteration - 1.0) / self.agent.num_iterations
-                lrnow = frac * self.agent.learning_rate
-                self.agent.optimizer.param_groups[0]["lr"] = lrnow
 
             for step in range(0, self.agent.num_steps):
                 step_start = time.time()
@@ -225,6 +223,7 @@ class RLNode(Node):
 
                 # execute the game and log data.
                 next_obs, reward, next_done = self.step(action.item())
+                next_obs = self.agent.reduce_state(next_obs)
                 self.agent.rewards[step] = torch.tensor(reward).to(self.agent.device).view(-1)
                 next_obs, next_done = torch.Tensor(next_obs).to(self.agent.device), torch.Tensor([next_done]).to(self.agent.device)
                 self.agent.log({"reward": reward})
@@ -247,7 +246,6 @@ class RLNode(Node):
                     print(f"iter {iteration} episode {episode_num} score {episode_reward:.3f} in {local_step} steps")
                     episode_scores.append(episode_reward)
                     episode_num += 1
-                    episode_reward = 0
                     local_step = 0
                     if np.median(step_duration_array) > self.single_step_threshold:
                         warning_msg = (f"CHECK ME...step duration {np.median(step_duration_array):.3f} "
@@ -255,10 +253,16 @@ class RLNode(Node):
                         self.get_logger().warn(warning_msg)
                         break
                     state = self.reset_environment()
+                    state = self.agent.reduce_state(state)
+                    episode_reward = 0
                     state = np.expand_dims(state, axis=1)
                     next_obs = torch.Tensor(state).to(self.agent.device)
                     next_done = torch.zeros(self.agent.num_envs).to(self.agent.device)
                     time.sleep(1.0)
+
+            # Annealing the rate if instructed to do so.
+            if self.agent.anneal_lr:
+                self.agent.scheduler.step()
 
             # bootstrap value if not done
             with torch.no_grad():
@@ -349,7 +353,7 @@ class RLNode(Node):
             # record rewards for plotting purposes
             metric_dict = {
                 "episode":                  episode_num,
-                "learning_rate":            self.agent.optimizer.param_groups[0]["lr"],
+                "learning_rate":            self.agent.scheduler.get_last_lr()[0],
                 "losses/value_loss":        v_loss.item(),
                 "losses/policy_loss":       pg_loss.item(),
                 "losses/entropy":           entropy_loss.item(),
@@ -486,10 +490,10 @@ class Agent(nn.Module):
 def main(args=None):
     if args is None:
         args = sys.argv
-    stage_num = args[1] if len(args) > 1 else '1'
+    stage_num = args[1] if len(args) > 1 else '3'
 
-    ppo_agent = PPOAgent(stage_num, use_wandb=False)
-    model_path = "../saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
+    ppo_agent = PPOAgent(stage_num, use_wandb=True)
+    model_path = "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
     ppo_agent.load_checkpoint(model_path)
     while ppo_agent.global_step < ppo_agent.total_timesteps:
         print("starting rclpy node...")

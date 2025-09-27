@@ -21,6 +21,7 @@ import math
 import os
 import sys
 import time
+import numpy as np
 
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TwistStamped
@@ -74,7 +75,6 @@ class RLEnvironment(Node):
         self.stop_cmd_vel_timer = None
         self.linear_velocity = 0.2
         self.angular_vel = [1.5, 0.75, 0.0, -0.75, -1.5]
-        self.last_angular_z = 0
         self.angular_z = 0
 
 
@@ -190,33 +190,29 @@ class RLEnvironment(Node):
             self.get_logger().error('task failed service call failed')
 
     def scan_sub_callback(self, scan):
-        self.scan_ranges = []
         self.front_ranges = []
-        self.front_angles = []
 
         num_of_lidar_rays = len(scan.ranges)
         angle_min = scan.angle_min
         angle_increment = scan.angle_increment
 
         self.front_distance = scan.ranges[0]
+        scan_array = np.array(scan.ranges)
+        # simulation:
+        scan_angles = np.linspace(scan.angle_min, (angle_min + (num_of_lidar_rays-1) * angle_increment), num_of_lidar_rays)
 
-        for i in range(num_of_lidar_rays):
-            angle = angle_min + i * angle_increment
-            distance = scan.ranges[i]
-            if distance == -float('Inf'):
-                # print(f"{i} / F{num_of_lidar_rays}, {distance}")
-                distance = 0.0
-            if distance == float('Inf'):
-                distance = 3.5
-            elif numpy.isnan(distance):
-                distance = 0.0
 
-            self.scan_ranges.append(distance)
+        # replace infeasible values
+        scan_array[np.isnan(scan_array)] = 0.0
+        scan_array[np.isinf(scan_array) & (scan_array < 0)] = 0.0
+        scan_array[np.isinf(scan_array) & (scan_array > 0)] = 3.5
+        # take only the front 180 deg
+        angle_mask = (scan_angles >= 0) & (scan_angles <= np.pi/2)
+        angle_mask = np.logical_or(angle_mask, ((scan_angles >= 3*np.pi/2) & (scan_angles <= 2*np.pi)))
 
-            if (0 <= angle <= math.pi/2) or (3*math.pi/2 <= angle <= 2*math.pi):
-                self.front_ranges.append(distance)
-                self.front_angles.append(angle)
-
+        self.front_angles = list(scan_angles[angle_mask])
+        self.scan_ranges = list(scan_array)
+        self.front_ranges = list(scan_array[angle_mask])
         self.min_obstacle_distance = min(self.scan_ranges)
         self.front_min_obstacle_distance = min(self.front_ranges) if self.front_ranges else 10.0
 
@@ -325,17 +321,23 @@ class RLEnvironment(Node):
         return reward
 
     def calculate_reward(self):
-        yaw_reward = - abs(self.goal_angle / math.pi / 2)
-        dist_reward = 0 # -abs(self.goal_distance) / 3.5 # note 3.5 is max radar dist
-        obstacle_reward = self.compute_weighted_obstacle_reward()
-        info_str = f"directional_reward: {yaw_reward:.3f}, goal_dist: {abs(self.goal_distance):.3f}, obstacle_reward: {obstacle_reward:.3f}"
+        yaw_reward = - abs(self.goal_angle / math.pi) * 0.01
+        dist_reward = -abs(self.goal_distance) * 0 # note 3.5 is max radar dist
+        obstacle_reward = self.compute_weighted_obstacle_reward() * 0.05
+        omega_reward = -abs(self.angular_z) / 1.5 * 0.01
+        info_str = (f"rewardsx100> directional: {yaw_reward*100:.2f}, obstacle: {obstacle_reward*100:.2f}, "
+                    # f"dist: {dist_reward*100:.2f}, omega: {omega_reward*100:.2f}")
+                    f"omega: {omega_reward*100:.2f}")
         self.get_logger().info(info_str)
-        reward = yaw_reward + dist_reward + obstacle_reward
+        reward = yaw_reward + dist_reward + obstacle_reward + omega_reward
 
         if self.succeed:
             reward += 100.0
+            print(f" -------------------------------- > SUCCESS! reward {reward:.3f}")
         elif self.fail:
-            reward += -50.0
+            if not self.timeout:
+                reward += -50.0
+            print(f" -------------------------------- > FAIL! timeout {self.timeout} reward {reward:.3f}")
 
         return reward
 
@@ -414,9 +416,7 @@ def main(args=None):
         args = sys.argv
     return_pose = args[1] if len(args) > 1 else '1'
     return_pose = int(return_pose) == 1
-
     print("return_pose:", return_pose)
-
     rclpy.init(args=args)
     rl_environment = RLEnvironment(return_pose)
     try:
