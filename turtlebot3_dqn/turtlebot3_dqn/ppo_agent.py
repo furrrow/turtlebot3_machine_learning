@@ -37,13 +37,13 @@ import torch.optim.lr_scheduler as lr_scheduler
 from torch.distributions.categorical import Categorical
 
 from turtlebot3_msgs.srv import Dqn
+import argparse
 import wandb
 
-LOGGING = True
-current_time = datetime.datetime.now()
-# start_time = datetime.datetime.now()
-
 """
+ppo_agent.py
+code mostly borrowed from the dqn agent and the cleanRL implementation of PPO.
+
 Note, must use tensorflow 2.18, version 2.20 results in a segfault without any warning...
 """
 
@@ -66,7 +66,6 @@ class PPOAgent():
         self.done = False
         self.succeed = False
         self.fail = False
-        self.load_model = True
 
         self.total_timesteps: int = 1000000
         self.learning_rate: float = 3e-4
@@ -96,6 +95,7 @@ class PPOAgent():
         self.batch_size = int(self.num_envs * self.num_steps)
         self.minibatch_size = int(self.batch_size // self.num_minibatches)
         self.num_iterations = self.total_timesteps // self.batch_size
+        current_time = datetime.datetime.now()
         self.run_name = f"stage{self.stage}__{self.learning_rate}__{self.batch_size}__{current_time.strftime('%m%d%y_%H%M')}"
         config_copy = {
             "total_timesteps"   :   self.total_timesteps,
@@ -155,14 +155,17 @@ class PPOAgent():
 
     def load_checkpoint(self, model_path):
         device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        checkpoint = torch.load(model_path, map_location=device)
-        self.network.load_state_dict(checkpoint['model_state_dict'])
-        # self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        # self.load_episode = checkpoint['episode']
-        # self.last_save_episode = checkpoint['episode']
-        # self.iteration = checkpoint['iteration']
-        # self.global_step = checkpoint['global_step']
-        print(f"model loaded from {model_path}")
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path, map_location=device)
+            self.network.load_state_dict(checkpoint['model_state_dict'])
+            # self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # self.load_episode = checkpoint['episode']
+            # self.last_save_episode = checkpoint['episode']
+            # self.iteration = checkpoint['iteration']
+            # self.global_step = checkpoint['global_step']
+            print(f"model loaded from {model_path}")
+        else:
+            print(f"failed to load {model_path}")
 
     # for when the lidar count is bigger than the state_size
     def reduce_state(self, original_state):
@@ -177,7 +180,7 @@ class PPOAgent():
             self.run.log(info, self.global_step)
 
 class RLNode(Node):
-    def __init__(self, ppo_agent: PPOAgent, time_threshold=0.2, spawn_process=True):
+    def __init__(self, ppo_agent: PPOAgent, time_threshold=0.2, spawn_process=True, train_mode=True):
         super().__init__('RL_node')
         self.agent = ppo_agent
         self.time_threshold = time_threshold
@@ -185,6 +188,7 @@ class RLNode(Node):
         self.rl_agent_interface_client = self.create_client(Dqn, 'rl_agent_interface')
         self.make_environment_client = self.create_client(Empty, 'make_environment')
         self.reset_environment_client = self.create_client(Dqn, 'reset_environment')
+        self.train_mode = train_mode
         if spawn_process:
             self.rl_process()
 
@@ -293,6 +297,8 @@ class RLNode(Node):
             b_inds = np.arange(self.agent.batch_size)
             clipfracs = []
             for epoch in range(self.agent.update_epochs):
+                if not self.train_mode:
+                    break
                 np.random.shuffle(b_inds)
                 optimizing_steps = 0
                 for start in range(0, self.agent.batch_size, self.agent.minibatch_size):
@@ -487,14 +493,11 @@ class Agent(nn.Module):
 
 
 
-def main(args=None):
-    if args is None:
-        args = sys.argv
-    stage_num = args[1] if len(args) > 1 else '3'
-
-    ppo_agent = PPOAgent(stage_num, use_wandb=False)
-    model_path = "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/turtlebot3_dqn/saved_model/stage3__0.0003__2056__091125_2148/ppo_stage3_episode1532.h5"
-    ppo_agent.load_checkpoint(model_path)
+def main(args):
+    ppo_agent = PPOAgent(args.stage, use_wandb=(args.wandb==1))
+    if args.ckpt is not None:
+        model_path = args.ckpt
+        ppo_agent.load_checkpoint(model_path)
     while ppo_agent.global_step < ppo_agent.total_timesteps:
         print("starting rclpy node...")
         rclpy.init()
@@ -505,4 +508,34 @@ def main(args=None):
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(
+        description="Offline script to run flownav")
+    # Parse command line arguments
+    parser.add_argument(
+        "--stage",
+        "-s",
+        default=2,
+        type=int,
+        help="which stage of the TB3 scenario to run (default: 2)",
+    )
+    parser.add_argument(
+        "--ckpt",
+        # default=None,
+        default="/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/turtlebot3_dqn/saved_model/stage3__0.0003__2056__091125_2148/ppo_stage3_episode1532.h5",
+        type=str,
+        help="Checkpoint path",
+    )
+    parser.add_argument(
+        "--mode",
+        default="train",
+        type=str,
+        help="mode: train or test",
+    )
+    parser.add_argument(
+        "--wandb",
+        default=0,
+        type=int,
+        help="logging with wandb, default 0, set to 1 to start logging",
+    )
+    args = parser.parse_args()
+    main(args)
