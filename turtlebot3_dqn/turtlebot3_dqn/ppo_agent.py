@@ -492,8 +492,8 @@ def main(args=None):
         args = sys.argv
     stage_num = args[1] if len(args) > 1 else '3'
 
-    ppo_agent = PPOAgent(stage_num, use_wandb=True)
-    model_path = "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage2__0.0005__2056__082625_1058/ppo_stage2_episode1761.h5"
+    ppo_agent = PPOAgent(stage_num, use_wandb=False)
+    model_path = "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/turtlebot3_dqn/saved_model/stage3__0.0003__2056__091125_2148/ppo_stage3_episode1532.h5"
     ppo_agent.load_checkpoint(model_path)
     while ppo_agent.global_step < ppo_agent.total_timesteps:
         print("starting rclpy node...")
