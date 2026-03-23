@@ -7,8 +7,6 @@ The original readme is below:
 
 ----------------------------------------------------
 
-- Active Branches: humble, jazzy, main(rolling)
-- Legacy Branches: *-devel, noetic
 
 ## Open Source Projects Related to TurtleBot3
 - [turtlebot3](https://github.com/ROBOTIS-GIT/turtlebot3)
