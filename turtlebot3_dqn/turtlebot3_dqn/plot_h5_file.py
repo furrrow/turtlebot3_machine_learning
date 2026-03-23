@@ -18,27 +18,10 @@ import matplotlib.colors as mcolors
 def main():
     hide_and_plot = True
 
-    # h5_path = "ppo_stage2_episode1761_traces.hdf5"
-    # goal_csv = "091025_2108_goals.csv"
-    h5_path = "ppo_stage3_episode101_traces.hdf5"  # change this!
-    goal_csv = "091225_1733_goals.csv"
-    # goal_csv = None
-    # h5_path = "ppo_stage3_episode101_traces.hdf5"
+    # h5_path = "ppo_stage3_episode101_traces.hdf5"  # change me!
     # goal_csv = "091225_1733_goals.csv"
-    # h5_path = "ppo_stage3_episode408_traces.hdf5"
-    # goal_csv = "091225_1827_goals.csv"
-    # h5_path = "ppo_stage3_episode309_traces.hdf5"
-    # goal_csv = "091025_2132_goals.csv"
-    # h5_path = "ppo_stage3_episode409_traces.hdf5"
-    # goal_csv = "091025_2211_goals.csv"
-    # h5_path = "ppo_stage3_episode717_traces.hdf5"
-    # goal_csv = "091025_2252_goals.csv"
-    # h5_path = "ppo_stage3_episode1024_traces.hdf5"
-    # goal_csv = "091025_2327_goals.csv"
-    # h5_path = "ppo_stage3_episode1532_traces.hdf5"
-    # goal_csv = "091025_2350_goals.csv"
-    # h5_path = "ppo_stage3_episode1839_traces.hdf5"
-    # goal_csv = "091125_0011_goals.csv"
+    h5_path = "ppo_stage2_episode879_traces.hdf5"
+    goal_csv = "032226_2004_goals.csv"
 
     f = h5py.File(h5_path, "r")
     if goal_csv:

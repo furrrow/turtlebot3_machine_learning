@@ -1,4 +1,10 @@
-# TurtleBot3
+# TurtleBot3 Custom Fork
+This is a custom fork of the turtlebot3 machine learning repo to include a simple PPO agent.
+This repo is used as part of the following project:
+https://github.com/umd-xlab/mario-kart
+The original readme is below:
+----------------------------------------------------
+
 <img src="https://raw.githubusercontent.com/ROBOTIS-GIT/emanual/master/assets/images/platform/turtlebot3/logo_turtlebot3.png" width="300">
 
 - Active Branches: humble, jazzy, main(rolling)

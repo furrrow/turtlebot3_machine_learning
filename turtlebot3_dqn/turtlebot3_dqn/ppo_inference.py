@@ -19,7 +19,6 @@
 # https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
 
 import datetime
-import pathlib
 import os
 import sys
 import time
@@ -31,16 +30,12 @@ from std_msgs.msg import Float32MultiArray
 from std_srvs.srv import Empty
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
-from torch.distributions.categorical import Categorical
-import matplotlib.pyplot as plt
 
+import matplotlib.pyplot as plt
+import argparse
 from turtlebot3_msgs.srv import Dqn
 from turtlebot3_dqn.ppo_agent import PPOAgent, RLNode
 import h5py
-import wandb
 
 LOGGING = True
 current_time = datetime.datetime.now()
@@ -58,9 +53,10 @@ def append_to_dataset(h5db, label, data, data_length=None):
     h5db[label][original_length:new_length] = data
 
 class InferenceNode(RLNode):
-    def __init__(self, ppo_agent: PPOAgent, h5_file, num_episodes, time_threshold=0.2, save_traces=False, verbose=True):
+    def __init__(self, ppo_agent: PPOAgent, h5_file, num_episodes, time_threshold=0.2, save_traces=False, verbose=True,
+                 plot_scans=False):
         super().__init__(ppo_agent, time_threshold, spawn_process=False)
-        self.plot_scans = True
+        self.plot_scans = plot_scans
         self.h5_file = h5_file
         self.num_episodes = num_episodes
         self.save_traces = save_traces
@@ -200,20 +196,15 @@ class InferenceNode(RLNode):
         return next_state, reward, done, pose_info
 
 
-def main(args=None):
-    if args is None:
-        args = sys.argv
-    stage_num = args[1] if len(args) > 1 else '3'
-    num_episodes = args[2] if len(args) > 2 else '1'
-    save_traces = args[3] if len(args) > 3 else '1'
-
-    verbose = True
-    save_traces = int(save_traces) == 1
-    num_episodes = int(num_episodes)
+def main(args):
+    stage_num = args.stage
+    verbose = args.verbose
+    save_traces = (args.save_traces == 1)
+    num_episodes = int(args.episodes)
     ppo_agent = PPOAgent(stage_num, use_wandb=False, make_save_folder=False)
     model_list = [
         # "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage2__0.0025__2056__082625_0027/ppo_stage2_episode533.h5",
-        "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/saved_model/stage3__0.0003__2056__091125_2148/ppo_stage3_episode101.h5",
+        "/home/jim/turtlebot3_ws/src/turtlebot3_machine_learning/turtlebot3_dqn/saved_model/stage2__0.0025__2056__082625_0027/ppo_stage2_episode879.h5"
     ]
 
     for model_path in model_list:
@@ -259,4 +250,32 @@ def main(args=None):
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(
+        description="Inference script for the PPO agent")
+    # Parse command line arguments
+    parser.add_argument(
+        "--stage",
+        "-s",
+        default=2,
+        type=int,
+        help="which stage of the TB3 scenario to run (default: 2)",
+    )
+    parser.add_argument(
+        "--save-traces",
+        default=1,
+        type=int,
+        help="if set to 1, will save traces (default: 1)",
+    )
+    parser.add_argument(
+        "--episodes",
+        default=1,
+        type=int,
+        help="number of episodes to save per model (default: 1)",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="more print statements",
+    )
+    args = parser.parse_args()
+    main(args)

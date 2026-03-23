@@ -289,8 +289,8 @@ class GazeboInterface(Node):
 def main(args=None):
     rclpy.init(args=sys.argv)
     stage_num = sys.argv[1] if len(sys.argv) > 1 else '2'
-    save_goal = sys.argv[1] if len(sys.argv) > 2 else '0'
-    complete_reset = sys.argv[1] if len(sys.argv) > 3 else '1'
+    save_goal = sys.argv[2] if len(sys.argv) > 2 else '0'
+    complete_reset = sys.argv[3] if len(sys.argv) > 3 else '1'
 
     save_goal = int(save_goal) == 1
     complete_reset = int(complete_reset) == 1

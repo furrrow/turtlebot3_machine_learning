@@ -509,7 +509,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description="Offline script to run flownav")
+        description="Training script for the PPO agent")
     # Parse command line arguments
     parser.add_argument(
         "--stage",
